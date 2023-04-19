@@ -6,6 +6,7 @@
 #define PGRC_LEARN_EXTENDREADSLIST_H
 
 #include <string>
+#include <vector>
 #include "ExtendIteratorInterface.h"
 #include "../PseudoGenomeBase.h"
 #include "../../ReadsSet/ReadsSetBase.h"
@@ -18,6 +19,12 @@ private:
 
 public:
 	int read_length;
+	int reads_count;
+	std::vector<uint8_t> off;
+	std::vector<uint8_t> rev_comp;
+	std::vector<uint8_t> mis_cnt; // #mismatches in each read
+	std::vector<uint8_t> mis_sym_code;
+	std::vector<uint8_t> mis_off; // mismatch offset for all reads
 
 	explicit ExtendReadsList(int len): read_length(len) {}
 
@@ -28,7 +35,7 @@ public:
 
 // Reads List Factories
 ExtendReadsList* load_extend_reads_list(
-		const std::istream &in,
+		std::istream &in,
 		int max_read_length,
 		int reads_count,
 		bool preserve_order_mode = false,
