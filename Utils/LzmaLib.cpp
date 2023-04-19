@@ -8,6 +8,7 @@
 #include "../lzma/LzmaDec.h"
 #include "../lzma/Alloc.h"
 #include "../lzma/Ppmd7.h"
+#include "../Utils/VarLenDNACoder.h"
 
 #define RC_INIT_SIZE 5
 #define UNCOMPRESS_BUFFER_SIZE 8192
@@ -150,5 +151,41 @@ void uncompress(char *dest, size_t dest_len, std::istream &in, size_t src_len, u
 	if (res != SZ_OK) {
 		fprintf(stderr, "Error code %d during decompression\n", res);
 		exit(EXIT_FAILURE);
+	}
+}
+
+void uncompress(char *dest, size_t dest_len, const char *src, size_t src_len, uint8_t coder_type) {
+	int res;
+	size_t out_len = dest_len;
+	if (coder_type == VARLEN_DNA_CODER) {
+		res = VarLenDNACoder::uncompress((unsigned char*)dest, dest_len,
+								         (unsigned char*)src, src_len);
+	} else {
+		fprintf(stderr, "Unsupported coder type: %d\n", coder_type);
+		exit(EXIT_FAILURE);
+	}
+	assert(out_len == dest_len);
+	if (res != SZ_OK) {
+		fprintf(stderr, "Error code %d during decompression\n", res);
+		exit(EXIT_FAILURE);
+	}
+}
+
+void read_compressed(std::istream &in, std::string &dest, int level) {
+	size_t dest_len = 0; read_value(in, dest_len);
+	dest.resize(dest_len);
+	if (dest_len == 0) return;
+	size_t src_len = 0; read_value(in, src_len);
+	uint8_t coder_type = 0; read_value(in, coder_type);
+//	fprintf(stderr, "level=%d, dest_len=%ld, src_len=%ld, coder_type=%d\n",
+//		 level, dest_len, src_len, coder_type);
+	if (coder_type == COMPOUND_CODER_TYPE) {
+		read_value(in, coder_type);
+		std::string component;
+		read_compressed(in, component, level+1);
+		assert(src_len == component.length());
+		uncompress((char*)dest.data(), dest_len, component.data(), src_len, coder_type);
+	} else {
+		uncompress((char*)dest.data(), dest_len, in, src_len, coder_type);
 	}
 }
