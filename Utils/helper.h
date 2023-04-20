@@ -10,7 +10,7 @@
 bool confirm_text_read_mode(std::ifstream &in);
 
 template<typename t_val>
-void read_value(std::istream &in, t_val &value, bool plain_text_read_mode) {
+void read_value(std::istream &in, t_val &value, bool plain_text_read_mode = false) {
 	if (plain_text_read_mode) in >> value;
 	else in.read((char*) &value, sizeof(t_val));
 }
@@ -34,5 +34,20 @@ void convert_mis_rev_offset(uint_read_len *offsets, uint8_t mis_cnt, uint_read_l
 }
 
 void read_array(std::istream &in, void *dest_array, size_t array_size_in_bytes);
+
+template<typename t_val>
+void read_uint_byte_frugal(std::istream &src, t_val &value) {
+	value = 0;
+	uint8_t _byte = 0; t_val base = 1;
+	do {
+		// The first bit in byte being 0 indicates the end of the number
+		// The left 7 bits store the real number
+		src.read((char *) &_byte, sizeof(uint8_t));
+		value += base * (_byte % 128); // Remove the first bit
+		base *= 128; // 7-bit base
+	} while (_byte >= 128);
+}
+
+std::string reverse_complement(const std::string &seq);
 
 #endif //PGRC_LEARN_HELPER_H
