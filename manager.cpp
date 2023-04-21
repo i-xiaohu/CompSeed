@@ -70,6 +70,7 @@ void Manager::load_all_PGs(ifstream &in) {
 	hq_pg_length = hq_pgh.get_pg_length();
 	non_pg_length = hq_pg_length + lq_pgh.get_pg_length();
 	if (preserve_order_mode) {
+		joined_pg_len_std = non_pg_length + n_pgh.get_pg_length() <= UINT32_MAX;
 		// wait to implement
 	} else {
 		spg_decompress_reads_order(
@@ -90,6 +91,43 @@ void Manager::load_all_PGs(ifstream &in) {
 	hq_pg = new SeparatedPseudoGenome(std::move(hq_pg_seq), hq_reads, hq_prop);
 	lq_pg = new SeparatedPseudoGenome(std::move(lq_pg_seq), lq_reads, lq_prop);
 	n_pg = new SeparatedPseudoGenome(std::move(n_pg_seq), n_reads, n_prop);
+}
+
+void Manager::write_all_reads_SE(const std::string &out_fn) const {
+	fstream out(archive_name + "_out", ios_base::out | ios_base::binary | ios::trunc);
+	string buffer, read1; read1.resize(read_length);
+	const uint64_t buf_size_guard = CHUNK_SIZE_IN_BYTES;
+	uint64_t total_size = total_reads_count * (read_length + 1); // Including '\n' in bases line
+	buffer.reserve(total_size < buf_size_guard ?total_size :buf_size_guard + (read_length + 1));
+	for (int i = 0; i < hq_reads_count; i++) {
+		if (buffer.size() > buf_size_guard) {
+			out << buffer;
+			buffer.resize(0);
+		}
+		hq_pg->get_next_mis_read((char *) read1.data());
+		buffer.append(read1);
+		buffer.push_back('\n');
+	}
+	for (int i = 0; i < lq_reads_count; i++) {
+		if (buffer.size() > buf_size_guard) {
+			out << buffer;
+			buffer.resize(0);
+		}
+		lq_pg->get_next_raw_read((char *) read1.data());
+		buffer.append(read1);
+		buffer.push_back('\n');
+	}
+	for (int i = 0; i < n_reads_count; i++) {
+		if (buffer.size() > buf_size_guard) {
+			out << buffer;
+			buffer.resize(0);
+		}
+		n_pg->get_next_raw_read((char*) read1.data());
+		buffer.append(read1);
+		buffer.push_back('\n');
+	}
+	out << buffer;
+	out.close();
 }
 
 void Manager::decompress() {
@@ -127,5 +165,26 @@ void Manager::decompress() {
 
 	load_all_PGs(in);
 
+	if (keep_pairing) {
+		if (joined_pg_len_std) {
+
+		} else {
+
+		}
+	}
+
+	if (not preserve_order_mode) {
+		if (single_end_mode) write_all_reads_SE("");
+//		else write_all_reads_PE();
+	} else {
+//		if (joined_pg_len_std) write_all_reads_ORD<int>();
+//		else write_all_reads_ORD<long>();
+	}
+
+	fprintf(stderr, "Decompressed %d reads in total\n", total_reads_count);
+
+	if (hq_pg) { delete hq_pg; hq_pg = nullptr; }
+	if (lq_pg) { delete lq_pg; lq_pg = nullptr; }
+	if (n_pg) { delete n_pg; n_pg = nullptr; }
 	in.close();
 }

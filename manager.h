@@ -52,11 +52,16 @@ private:
 	SeparatedPseudoGenome *lq_pg = nullptr;
 	SeparatedPseudoGenome *n_pg = nullptr;
 
+	bool joined_pg_len_std;
 	vector<int> idx_order;
+	const size_t CHUNK_SIZE_IN_BYTES = 100000; // 100KB
+
 public:
 	void set_archive_name(const char *fn) { this->archive_name = fn; }
 
 	void load_all_PGs(ifstream &in);
+
+	void write_all_reads_SE(const std::string &out_fn) const;
 
 	void decompress();
 };
