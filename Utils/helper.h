@@ -50,4 +50,8 @@ void read_uint_byte_frugal(std::istream &src, t_val &value) {
 
 std::string reverse_complement(const std::string &seq);
 
+void rev_comp_in_place(char *ptr, int len);
+
+char code_to_mismatch(char actual, uint8_t code);
+
 #endif //PGRC_LEARN_HELPER_H
