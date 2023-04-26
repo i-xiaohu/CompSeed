@@ -26,10 +26,16 @@ public:
 
 	~SeparatedPseudoGenome();
 
-	/** Fetch next read with mismatches: reads in PG_hq */
+	/** Fetch next read from PG_hq[pos, pos+L) with mismatches */
+	void get_next_mis_read(char *ptr, uint64_t pos);
+
+	/** Fetch next read from PG_hq with mismatches in sorted order */
 	void get_next_mis_read(char *ptr);
 
-	/** Fetch next read without mismatch: reads in PG_lq and PG_n */
+	/** Fetch next read from PG_lq[pos, pos+L) or Pg_n[pos, pos+L) with no mismatch */
+	void get_next_raw_read(char *ptr, uint64_t pos);
+
+	/** Fetch next read from PG_lq or PG_n without mismatch in sorted order */
 	void get_next_raw_read(char *ptr);
 };
 
@@ -39,5 +45,9 @@ void spg_decompress_reads_order(
 		bool complete_order_info,
 		bool take_pe_as_se,
 		bool single_end_mode);
+
+template<typename uint_pg_len>
+void decompress_pg_position(std::istream &in, std::vector<uint_pg_len> &pg_pos,
+							int reads_count, bool se_mode);
 
 #endif //PGRC_LEARN_SEPARATEDPG_H

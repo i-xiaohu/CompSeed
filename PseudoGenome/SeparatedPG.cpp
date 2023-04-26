@@ -22,9 +22,8 @@ SeparatedPseudoGenome::~SeparatedPseudoGenome() {
 	delete properties;
 }
 
-void SeparatedPseudoGenome::get_next_mis_read(char *ptr) {
-	cur_pos += reads_list->off[next_idx];
-	memcpy(ptr, (pg_sequence.data() + cur_pos), reads_list->read_length);
+void SeparatedPseudoGenome::get_next_mis_read(char *ptr, uint64_t pos) {
+	memcpy(ptr, (pg_sequence.data() + pos), reads_list->read_length);
 	if (reads_list->rev_comp[next_idx]) {
 		rev_comp_in_place(ptr, reads_list->read_length);
 	}
@@ -35,6 +34,15 @@ void SeparatedPseudoGenome::get_next_mis_read(char *ptr) {
 		cur_mis_cnt++;
 	}
 	next_idx++;
+}
+
+void SeparatedPseudoGenome::get_next_mis_read(char *ptr) {
+	cur_pos += reads_list->off[next_idx];
+	get_next_mis_read(ptr, cur_pos);
+}
+
+void SeparatedPseudoGenome::get_next_raw_read(char *ptr, uint64_t pos) {
+	memcpy(ptr, (pg_sequence.data() + pos), reads_list->read_length);
 }
 
 void SeparatedPseudoGenome::get_next_raw_read(char *ptr) {
@@ -56,3 +64,43 @@ void spg_decompress_reads_order(
 		fprintf(stderr, "idx_order: %ld\n", idx_order.size());
 	}
 }
+
+template<typename uint_pg_len>
+void decompress_pg_position(std::istream &in, std::vector<uint_pg_len> &pg_pos,
+                            int reads_count, bool se_mode) {
+	if (se_mode) {
+		read_compressed(in, pg_pos);
+		return;
+	}
+
+	// Paired-end mode
+	bool delta_enabled = (bool) in.get(); // enable delta pair encoding
+	std::vector<uint8_t> offset_in_uint16_flag;
+	std::vector<uint8_t> offset_is_base_first_flag;
+	std::vector<uint16_t> offset_in_uint16_value;
+	pg_pos.reserve(reads_count);
+	read_compressed(in, pg_pos);
+	read_compressed(in, offset_in_uint16_flag);
+	read_compressed(in, offset_is_base_first_flag);
+	read_compressed(in, offset_in_uint16_value);
+
+	std::vector<uint8_t> delta_in_int16_flag;
+	std::vector<uint8_t> delta_is_base_first_flag;
+	std::vector<int16_t> delta_in_int16_value;
+	if (delta_enabled) {
+		read_compressed(in, delta_in_int16_flag);
+		read_compressed(in, delta_is_base_first_flag);
+		read_compressed(in, delta_in_int16_value);
+	}
+
+	std::vector<uint_pg_len> not_base_pair_pos;
+	read_compressed(in, not_base_pair_pos);
+	int pairs_count = reads_count / 2;
+	std::vector<int> bpp_rank; bpp_rank.reserve(pairs_count);
+	for (int p = 0; p < pairs_count; p++) bpp_rank.push_back(p);
+}
+
+template void decompress_pg_position(std::istream &in, std::vector<uint32_t> &pg_pos,
+		int reads_count, bool se_mode);
+template void decompress_pg_position(std::istream &in, std::vector<uint64_t> &pg_pos,
+		int reads_count, bool se_mode);
