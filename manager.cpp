@@ -22,7 +22,6 @@ void Manager::load_all_PGs(ifstream &in) {
 	PseudoGenomeHeader hq_pgh(in);
 	auto *hq_prop = new ReadsSetProperties(in);
 	assert(!confirm_text_read_mode(in));
-	assert(preserve_order_mode == false);
 	auto *hq_reads = load_extend_reads_list(
 			in,
 			hq_pgh.get_max_read_length(),
@@ -64,14 +63,18 @@ void Manager::load_all_PGs(ifstream &in) {
 	hq_reads_count = hq_prop->reads_count;
 	lq_reads_count = lq_prop->reads_count;
 	non_reads_count = hq_reads_count + lq_reads_count;
-	n_reads_count = separate_N ?n_prop->reads_count :0;
+	n_reads_count = n_prop ?n_prop->reads_count :0;
 	total_reads_count = non_reads_count + n_reads_count;
 
 	hq_pg_length = hq_pgh.get_pg_length();
 	non_pg_length = hq_pg_length + lq_pgh.get_pg_length();
 	if (preserve_order_mode) {
 		joined_pg_len_std = non_pg_length + n_pgh.get_pg_length() <= UINT32_MAX;
-		// wait to implement
+		if (joined_pg_len_std) {
+			decompress_pg_position(in, org_idx_32, total_reads_count, single_end_mode);
+		} else {
+			decompress_pg_position(in, org_idx_64, total_reads_count, single_end_mode);
+		}
 	} else {
 		spg_decompress_reads_order(
 				in,
@@ -83,18 +86,13 @@ void Manager::load_all_PGs(ifstream &in) {
 
 	string hq_pg_seq, lq_pg_seq, n_pg_seq;
 	restore_all_matched_pg(in, hq_pg_length, hq_pg_seq, lq_pg_seq, n_pg_seq);
-//	std::ofstream os("./pg.txt");
-//	os << hq_pg_seq << endl;
-//	os << lq_pg_seq << endl;
-//	os << n_pg_seq << endl;
-//	os.close();
 	hq_pg = new SeparatedPseudoGenome(std::move(hq_pg_seq), hq_reads, hq_prop);
 	lq_pg = new SeparatedPseudoGenome(std::move(lq_pg_seq), lq_reads, lq_prop);
 	n_pg = new SeparatedPseudoGenome(std::move(n_pg_seq), n_reads, n_prop);
 }
 
 void Manager::write_all_reads_SE(const std::string &out_fn) const {
-	fstream out(archive_name + "_out", ios_base::out | ios_base::binary | ios::trunc);
+	fstream out(out_fn, ios_base::out | ios_base::binary | ios::trunc);
 	string buffer, read1; read1.resize(read_length);
 	const uint64_t buf_size_guard = CHUNK_SIZE_IN_BYTES;
 	uint64_t total_size = total_reads_count * (read_length + 1); // Including '\n' in bases line
@@ -104,7 +102,7 @@ void Manager::write_all_reads_SE(const std::string &out_fn) const {
 			out << buffer;
 			buffer.resize(0);
 		}
-		hq_pg->get_next_mis_read((char *) read1.data());
+		hq_pg->get_next_mis_read((char*) read1.data());
 		buffer.append(read1);
 		buffer.push_back('\n');
 	}
@@ -113,7 +111,7 @@ void Manager::write_all_reads_SE(const std::string &out_fn) const {
 			out << buffer;
 			buffer.resize(0);
 		}
-		lq_pg->get_next_raw_read((char *) read1.data());
+		lq_pg->get_next_raw_read((char*) read1.data());
 		buffer.append(read1);
 		buffer.push_back('\n');
 	}
@@ -130,11 +128,40 @@ void Manager::write_all_reads_SE(const std::string &out_fn) const {
 	out.close();
 }
 
-void Manager::decompress() {
-	ifstream in(archive_name); assert(in.is_open());
-	for (int i = 0; i < strlen(PGRC_HEADER); i++) {
-		assert(in.get() == PGRC_HEADER[i]);
+template<typename uint_pg_len>
+void Manager::write_all_reads_ORD(const std::string &out_fn,
+	const vector<uint_pg_len> &org_idx) const {
+	int parts = single_end_mode ?1 :2;
+	for (int p = 1; p <= parts; p++) {
+		string out_filename = out_fn + (single_end_mode ?"" :"_" + to_string(p));
+		fstream os(out_filename, ios::out | ios::binary | ios::trunc);
+		string buffer, read1; read1.resize(read_length);
+		const uint64_t buf_size_guard = CHUNK_SIZE_IN_BYTES;
+		uint64_t total_size = total_reads_count * (read_length + 1);
+		buffer.reserve(total_size < buf_size_guard ?total_size :buf_size_guard + (read_length + 1));
+		for (int i = (total_reads_count / parts) * (p-1); i < (total_reads_count / parts) * p; i++) {
+			if (buffer.size() > buf_size_guard) {
+				os << buffer;
+				buffer.resize(0);
+			}
+			uint_pg_len pos = org_idx[i];
+			if (pos < hq_pg_length) hq_pg->get_next_mis_read((char*) read1.data(), pos);
+			else {
+				if (pos < non_pg_length) lq_pg->get_next_raw_read((char*) read1.data(), pos - hq_pg_length);
+				else n_pg->get_next_raw_read((char*) read1.data(), pos - non_pg_length);
+				if (p == 2) rev_comp_in_place((char*) read1.data(), read_length);
+			}
+			buffer.append(read1);
+			buffer.push_back('\n');
+		}
+		os << buffer;
+		os.close();
 	}
+}
+
+void Manager::decompress(const std::string &out_fn) {
+	ifstream in(archive_name); assert(in.is_open());
+	for (int i = 0; i < strlen(PGRC_HEADER); i++) assert(in.get() == PGRC_HEADER[i]);
 	char version_mode = in.get(); assert(version_mode == '#');
 	char version_major = in.get();
 	char version_minor = in.get();
@@ -146,6 +173,8 @@ void Manager::decompress() {
 	}
 	compression_level = in.get();
 	char pgrc_mode = in.get(); assert(0 <= pgrc_mode and pgrc_mode <= 4); // from 0 to 4
+	const std::string five_modes[] = {"SE", "PE", "SE_ORD", "PE_ORD", "PE_MIN"};
+	fprintf(stderr, "Compression mode: %s\n", five_modes[pgrc_mode].c_str());
 	separate_N = (bool) in.get();
 	if (pgrc_mode == PGRC_PE_MODE or pgrc_mode == PGRC_ORD_PE_MODE) {
 		keep_pairing = (bool) in.get();
@@ -166,19 +195,15 @@ void Manager::decompress() {
 	load_all_PGs(in);
 
 	if (keep_pairing) {
-		if (joined_pg_len_std) {
-
-		} else {
-
-		}
+		// TODO: reverse complement pairing file
 	}
 
 	if (not preserve_order_mode) {
-		if (single_end_mode) write_all_reads_SE("");
+		if (single_end_mode) write_all_reads_SE(out_fn);
 //		else write_all_reads_PE();
 	} else {
-//		if (joined_pg_len_std) write_all_reads_ORD<int>();
-//		else write_all_reads_ORD<long>();
+		if (joined_pg_len_std) write_all_reads_ORD(out_fn, org_idx_32);
+		else write_all_reads_ORD(out_fn, org_idx_64);
 	}
 
 	fprintf(stderr, "Decompressed %d reads in total\n", total_reads_count);

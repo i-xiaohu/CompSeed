@@ -55,6 +55,11 @@ private:
 	bool joined_pg_len_std;
 	vector<int> idx_order;
 	const size_t CHUNK_SIZE_IN_BYTES = 100000; // 100KB
+	vector<uint32_t> org_idx_32; // The position on PG of reads in original FASTQ order (32-bit)
+	vector<uint64_t> org_idx_64; // The position on PG of reads in original FASTQ order (64-bit)
+	// org_idx[0] is PG position of the first read in FASTQ
+	// ...
+	// org_idx[n] is PG position of the n read in FASTQ
 
 public:
 	void set_archive_name(const char *fn) { this->archive_name = fn; }
@@ -63,7 +68,11 @@ public:
 
 	void write_all_reads_SE(const std::string &out_fn) const;
 
-	void decompress();
+	/** This function works for both SE_ORD and PE_ORD mode */
+	template<typename uint_pg_len>
+	void write_all_reads_ORD(const std::string &out_fn, const vector<uint_pg_len> &org_idx) const;
+
+	void decompress(const std::string &out_fn);
 };
 
 #endif //PGRC_LEARN_MANAGER_H
