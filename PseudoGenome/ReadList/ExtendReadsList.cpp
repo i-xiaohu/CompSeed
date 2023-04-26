@@ -37,13 +37,12 @@ ExtendReadsList* load_extend_reads_list(
 		// The maximum mismatches allowed
 		uint8_t mismatches_count_limit = 0;
 		read_value(in, mismatches_count_limit, false);
-		// TODO: I can not understand the jump array
 		std::vector<uint8_t> misCnt2srcIdx(UINT8_MAX, mismatches_count_limit);
 		for (uint8_t m = 1; m < mismatches_count_limit; m++) {
 			read_value(in, misCnt2srcIdx[m], false);
 		}
 		// Mismatch buckets, srcs[i] contains mismatch offset for all reads with i mismatches
-		std::vector<uint8_t> srcs[UINT8_MAX]; // FIXME: is 8-bit enough for offset?
+		std::vector<uint8_t> srcs[UINT8_MAX];
 		std::vector<int> src_counter(UINT8_MAX, 0);
 		for (uint8_t m = 1; m <= mismatches_count_limit; m++) {
 			read_compressed(in, srcs[m]);

@@ -5,6 +5,6 @@
 int main(int argc, char *argv[]) {
 	Manager worker;
 	if (!strcmp(argv[1], "dec")) worker.set_archive_name(argv[2]);
-	worker.decompress();
+	worker.decompress(argv[3]);
 	return 0;
 }
