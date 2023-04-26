@@ -39,12 +39,8 @@ public:
 	void get_next_raw_read(char *ptr);
 };
 
-void spg_decompress_reads_order(
-		std::istream &in,
-		std::vector<int> idx_order,
-		bool complete_order_info,
-		bool take_pe_as_se,
-		bool single_end_mode);
+/** For PE mode, restoring the pairing information from 7 streams. */
+void restore_paired_idx(std::istream &in, std::vector<int> &paired_idx);
 
 template<typename uint_pg_len>
 void decompress_pg_position(std::istream &in, std::vector<uint_pg_len> &pg_pos,
