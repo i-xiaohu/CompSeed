@@ -37,6 +37,12 @@ public:
 
 	/** Fetch next read from PG_lq or PG_n without mismatch in sorted order */
 	void get_next_raw_read(char *ptr);
+
+	ExtendReadsList *get_reads_list() { return reads_list; }
+
+	void get_mis_read(int idx, char *ptr);
+
+	void get_raw_read(int idx, char *ptr);
 };
 
 /** For PE mode, restoring the pairing information from 7 streams. */

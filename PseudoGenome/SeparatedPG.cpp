@@ -52,6 +52,26 @@ void SeparatedPseudoGenome::get_next_raw_read(char *ptr) {
 	next_idx++;
 }
 
+
+void SeparatedPseudoGenome::get_mis_read(int idx, char *ptr) {
+	memcpy(ptr, pg_sequence.data() + reads_list->pos[idx], reads_list->read_length);
+	if (not reads_list->rev_comp.empty() and reads_list->rev_comp[idx]) {
+		rev_comp_in_place(ptr, reads_list->read_length);
+	}
+
+	if (not reads_list->mis_cum_count.empty() or not reads_list->mis_off.empty()) {
+		for (int i = reads_list->mis_cum_count[idx]; i < reads_list->mis_cum_count[idx+1]; i++) {
+			uint8_t mis_pos = reads_list->mis_off[i];
+			uint8_t mis_sym = reads_list->mis_sym_code[i];
+			ptr[mis_pos] = code_to_mismatch(ptr[mis_pos], mis_sym);
+		}
+	}
+}
+
+void SeparatedPseudoGenome::get_raw_read(int idx, char *ptr) {
+	memcpy(ptr, pg_sequence.data() + reads_list->pos[idx], reads_list->read_length);
+}
+
 void restore_paired_idx(std::istream &in, std::vector<int> &paired_idx) {
 	// 1. offset_flag is a binary flag telling if the distance between two reads from the pair
 	// is small enough to fit a byte; the distance is expressed in the number of aligned reads
