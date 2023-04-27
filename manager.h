@@ -33,7 +33,7 @@ private:
 	bool single_end_mode = false;
 	bool preserve_order_mode = false;
 	bool ignore_pair_order = false; // For MIN_PE mode
-	bool rev_comp_pair = true; // reads from file_2
+	bool rev_comp_pair = false;
 
 	string pg_mapped_HQ_prefix;
 	string pg_mapped_LQ_prefix;
