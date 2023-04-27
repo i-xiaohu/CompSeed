@@ -15,14 +15,6 @@ ReadsSetProperties::ReadsSetProperties(std::ifstream &in) {
 	in >> symbols_count;
 	in >> symbols_list;
 	generate_symbol_order();
-
-	fprintf(stderr, "reads_count = %d\n", reads_count);
-	fprintf(stderr, "all_read_length = %ld\n", all_read_length);
-	fprintf(stderr, "constant_read_length = %d\n", constant_read_length);
-	fprintf(stderr, "min_read_length = %d\n", min_read_length);
-	fprintf(stderr, "max_read_length = %d\n", max_read_length);
-	fprintf(stderr, "symbols_count = %d\n", symbols_count);
-	fprintf(stderr, "symbols_list = %s\n", symbols_list);
 }
 
 void ReadsSetProperties::generate_symbol_order() {

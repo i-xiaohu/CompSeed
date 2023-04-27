@@ -20,7 +20,9 @@ public:
 	char symbols_list[UCHAR_MAX] = {0};
 	int symbols_order[UCHAR_MAX] = {-1};
 
-	ReadsSetProperties(std::ifstream &in);
+	ReadsSetProperties() = default;
+
+	explicit ReadsSetProperties(std::ifstream &in);
 
 	void generate_symbol_order();
 };
