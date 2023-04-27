@@ -14,7 +14,9 @@ static const char PGRC_SE_MODE = 0; // reordered Singled End
 static const char PGRC_PE_MODE = 1; // reordered Paired End
 static const char PGRC_ORD_SE_MODE = 2; // preserve Order Singled End
 static const char PGRC_ORD_PE_MODE = 3; // preserve Order Paired End
-static const char PGRC_MIN_PE_MODE = 4; // Taking PE as SE
+// Ignore pair order information, which means a pair of reads (read_1,read_2)
+// may come from either (file_1,file_2) or (file_2, file_1)
+static const char PGRC_MIN_PE_MODE = 4;
 
 static const char *const PGRC_HEADER = "PgRC";
 static const char PGRC_VERSION_MAJOR = 1;
@@ -28,10 +30,10 @@ private:
 	string archive_name;
 	uint8_t compression_level = 2;
 	bool separate_N = true; // separate reads with N
-	bool keep_pairing = true; // Keep pairing information
-	bool preserve_order_mode = false;
-	bool take_pe_as_se = false;
 	bool single_end_mode = false;
+	bool preserve_order_mode = false;
+	bool ignore_pair_order = false; // For MIN_PE mode
+	bool rev_comp_pair = true; // reads from file_2
 
 	string pg_mapped_HQ_prefix;
 	string pg_mapped_LQ_prefix;
@@ -52,21 +54,27 @@ private:
 	SeparatedPseudoGenome *lq_pg = nullptr;
 	SeparatedPseudoGenome *n_pg = nullptr;
 
+	vector<int> paired_idx; // paired_idx[2i] and paired_idx[2i+1] store the indexes in PG for a pair of reads
 	bool joined_pg_len_std;
-	vector<int> idx_order;
-	const size_t CHUNK_SIZE_IN_BYTES = 100000; // 100KB
 	vector<uint32_t> org_idx_32; // The position on PG of reads in original FASTQ order (32-bit)
 	vector<uint64_t> org_idx_64; // The position on PG of reads in original FASTQ order (64-bit)
 	// org_idx[0] is PG position of the first read in FASTQ
 	// ...
 	// org_idx[n] is PG position of the n read in FASTQ
 
+	const size_t CHUNK_SIZE_IN_BYTES = 100000; // 100KB
+
 public:
 	void set_archive_name(const char *fn) { this->archive_name = fn; }
 
 	void load_all_PGs(ifstream &in);
 
+	template<typename uint_pg_len>
+	void apply_rc_pair_to_pg(std::vector<uint_pg_len> &org_idx);
+
 	void write_all_reads_SE(const std::string &out_fn) const;
+
+	void write_all_reads_PE(const std::string &out_fn) const;
 
 	/** This function works for both SE_ORD and PE_ORD mode */
 	template<typename uint_pg_len>

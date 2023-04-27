@@ -75,13 +75,8 @@ void Manager::load_all_PGs(ifstream &in) {
 		} else {
 			decompress_pg_position(in, org_idx_64, total_reads_count, single_end_mode);
 		}
-	} else {
-		spg_decompress_reads_order(
-				in,
-				idx_order,
-				preserve_order_mode,
-				take_pe_as_se,
-				single_end_mode);
+	} else if (not single_end_mode) {
+		restore_paired_idx(in, paired_idx);
 	}
 
 	string hq_pg_seq, lq_pg_seq, n_pg_seq;
@@ -128,6 +123,37 @@ void Manager::write_all_reads_SE(const std::string &out_fn) const {
 	out.close();
 }
 
+void Manager::write_all_reads_PE(const std::string &out_fn) const {
+	hq_pg->get_reads_list()->enable_constant_access(true);
+	lq_pg->get_reads_list()->enable_constant_access(true);
+	if (n_pg) n_pg->get_reads_list()->enable_constant_access(true);
+
+	for (int p = 1; p <= 2; p++) {
+		fstream os(out_fn + "_" + to_string(p), ios::out | ios::binary | ios::trunc);
+		string buffer, read1; read1.resize(read_length);
+		const uint64_t buf_size_guard = CHUNK_SIZE_IN_BYTES;
+		uint64_t total_size = total_reads_count * (read_length + 1);
+		buffer.reserve(total_size < buf_size_guard ?total_size :buf_size_guard + (read_length + 1));
+		for (int i = p-1; i < total_reads_count; i += 2) {
+			if (buffer.size() > buf_size_guard) {
+				os << buffer;
+				buffer.resize(0);
+			}
+			int idx = paired_idx[i];
+			if (idx < hq_reads_count) hq_pg->get_mis_read(idx, (char*) read1.data());
+			else {
+				if (idx < non_reads_count) lq_pg->get_raw_read(idx - hq_reads_count, (char*) read1.data());
+				else n_pg->get_raw_read(idx - non_reads_count, (char*) read1.data());
+				if (p == 2) rev_comp_in_place((char*) read1.data(), read_length);
+			}
+			buffer.append(read1);
+			buffer.push_back('\n');
+		}
+		os << buffer;
+		os.close();
+	}
+}
+
 template<typename uint_pg_len>
 void Manager::write_all_reads_ORD(const std::string &out_fn,
 	const vector<uint_pg_len> &org_idx) const {
@@ -159,6 +185,21 @@ void Manager::write_all_reads_ORD(const std::string &out_fn,
 	}
 }
 
+template<typename uint_pg_len>
+void Manager::apply_rc_pair_to_pg(std::vector<uint_pg_len> &org_idx) {
+	if (preserve_order_mode) {
+
+	} else {
+		// Reverse complement each read from file2
+		for (int i = 1; i < total_reads_count; i += 2) {
+			int idx = paired_idx[i];
+			if (idx < hq_reads_count) {
+				hq_pg->get_reads_list()->rev_comp[idx] = !hq_pg->get_reads_list()->rev_comp[idx];
+			}
+		}
+	}
+}
+
 void Manager::decompress(const std::string &out_fn) {
 	ifstream in(archive_name); assert(in.is_open());
 	for (int i = 0; i < strlen(PGRC_HEADER); i++) assert(in.get() == PGRC_HEADER[i]);
@@ -177,7 +218,7 @@ void Manager::decompress(const std::string &out_fn) {
 	fprintf(stderr, "Compression mode: %s\n", five_modes[pgrc_mode].c_str());
 	separate_N = (bool) in.get();
 	if (pgrc_mode == PGRC_PE_MODE or pgrc_mode == PGRC_ORD_PE_MODE) {
-		keep_pairing = (bool) in.get();
+		rev_comp_pair = (bool) in.get();
 	}
 	string tmp_directory; in >> tmp_directory; tmp_directory += "/";
     in.get();
@@ -189,18 +230,19 @@ void Manager::decompress(const std::string &out_fn) {
     pg_N_prefix = tmp_directory + N_INFIX;
 
 	preserve_order_mode = (pgrc_mode == PGRC_ORD_SE_MODE or pgrc_mode == PGRC_ORD_PE_MODE);
-	take_pe_as_se = (pgrc_mode == PGRC_MIN_PE_MODE);
 	single_end_mode = (pgrc_mode == PGRC_SE_MODE or pgrc_mode == PGRC_ORD_SE_MODE);
+	ignore_pair_order = (pgrc_mode == PGRC_MIN_PE_MODE);
 
 	load_all_PGs(in);
 
-	if (keep_pairing) {
-		// TODO: reverse complement pairing file
+	if (rev_comp_pair) {
+		if (joined_pg_len_std) apply_rc_pair_to_pg(org_idx_32);
+		else apply_rc_pair_to_pg(org_idx_64);
 	}
 
 	if (not preserve_order_mode) {
 		if (single_end_mode) write_all_reads_SE(out_fn);
-//		else write_all_reads_PE();
+		else write_all_reads_PE(out_fn);
 	} else {
 		if (joined_pg_len_std) write_all_reads_ORD(out_fn, org_idx_32);
 		else write_all_reads_ORD(out_fn, org_idx_64);
