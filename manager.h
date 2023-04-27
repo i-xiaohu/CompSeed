@@ -56,8 +56,8 @@ private:
 
 	vector<int> paired_idx; // paired_idx[2i] and paired_idx[2i+1] store the indexes in PG for a pair of reads
 	bool joined_pg_len_std;
-	vector<uint32_t> org_idx_32; // The position on PG of reads in original FASTQ order (32-bit)
-	vector<uint64_t> org_idx_64; // The position on PG of reads in original FASTQ order (64-bit)
+	vector<uint32_t> pos_pg_32; // The position on PG of reads in original FASTQ order (32-bit)
+	vector<uint64_t> pos_pg_64; // The position on PG of reads in original FASTQ order (64-bit)
 	// org_idx[0] is PG position of the first read in FASTQ
 	// ...
 	// org_idx[n] is PG position of the n read in FASTQ
@@ -70,7 +70,7 @@ public:
 	void load_all_PGs(ifstream &in);
 
 	template<typename uint_pg_len>
-	void apply_rc_pair_to_pg(std::vector<uint_pg_len> &org_idx);
+	void apply_rc_pair_to_pg(std::vector<uint_pg_len> &pg_pos);
 
 	void write_all_reads_SE(const std::string &out_fn) const;
 
@@ -78,7 +78,7 @@ public:
 
 	/** This function works for both SE_ORD and PE_ORD mode */
 	template<typename uint_pg_len>
-	void write_all_reads_ORD(const std::string &out_fn, const vector<uint_pg_len> &org_idx) const;
+	void write_all_reads_ORD(const std::string &out_fn, const vector<uint_pg_len> &pos_pg) const;
 
 	void decompress(const std::string &out_fn);
 };

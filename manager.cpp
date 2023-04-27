@@ -71,9 +71,9 @@ void Manager::load_all_PGs(ifstream &in) {
 	if (preserve_order_mode) {
 		joined_pg_len_std = non_pg_length + n_pgh.get_pg_length() <= UINT32_MAX;
 		if (joined_pg_len_std) {
-			decompress_pg_position(in, org_idx_32, total_reads_count, single_end_mode);
+			decompress_pg_position(in, pos_pg_32, total_reads_count, single_end_mode);
 		} else {
-			decompress_pg_position(in, org_idx_64, total_reads_count, single_end_mode);
+			decompress_pg_position(in, pos_pg_64, total_reads_count, single_end_mode);
 		}
 	} else if (not single_end_mode) {
 		restore_paired_idx(in, paired_idx);
@@ -155,8 +155,7 @@ void Manager::write_all_reads_PE(const std::string &out_fn) const {
 }
 
 template<typename uint_pg_len>
-void Manager::write_all_reads_ORD(const std::string &out_fn,
-	const vector<uint_pg_len> &org_idx) const {
+void Manager::write_all_reads_ORD(const std::string &out_fn, const vector<uint_pg_len> &pos_pg) const {
 	int parts = single_end_mode ?1 :2;
 	for (int p = 1; p <= parts; p++) {
 		string out_filename = out_fn + (single_end_mode ?"" :"_" + to_string(p));
@@ -170,7 +169,7 @@ void Manager::write_all_reads_ORD(const std::string &out_fn,
 				os << buffer;
 				buffer.resize(0);
 			}
-			uint_pg_len pos = org_idx[i];
+			uint_pg_len pos = pos_pg[i];
 			if (pos < hq_pg_length) hq_pg->get_next_mis_read((char*) read1.data(), pos);
 			else {
 				if (pos < non_pg_length) lq_pg->get_next_raw_read((char*) read1.data(), pos - hq_pg_length);
@@ -186,9 +185,21 @@ void Manager::write_all_reads_ORD(const std::string &out_fn,
 }
 
 template<typename uint_pg_len>
-void Manager::apply_rc_pair_to_pg(std::vector<uint_pg_len> &org_idx) {
+void Manager::apply_rc_pair_to_pg(std::vector<uint_pg_len> &pg_pos) {
 	if (preserve_order_mode) {
-
+		int hq_idx = 0;
+		const int pairs_count = total_reads_count / 2;
+		for (int i = 0; i < pairs_count; i++) {
+			uint_pg_len pos = pg_pos[i];
+			if (pos < hq_pg_length) hq_idx++;
+		}
+		for (int i = pairs_count; i < total_reads_count; i++) {
+			uint_pg_len pos = pg_pos[i];
+			if (pos < hq_pg_length) {
+				hq_pg->get_reads_list()->rev_comp[hq_idx] = !hq_pg->get_reads_list()->rev_comp[hq_idx];
+				hq_idx++;
+			}
+		}
 	} else {
 		// Reverse complement each read from file2
 		for (int i = 1; i < total_reads_count; i += 2) {
@@ -236,16 +247,16 @@ void Manager::decompress(const std::string &out_fn) {
 	load_all_PGs(in);
 
 	if (rev_comp_pair) {
-		if (joined_pg_len_std) apply_rc_pair_to_pg(org_idx_32);
-		else apply_rc_pair_to_pg(org_idx_64);
+		if (joined_pg_len_std) apply_rc_pair_to_pg(pos_pg_32);
+		else apply_rc_pair_to_pg(pos_pg_64);
 	}
 
 	if (not preserve_order_mode) {
 		if (single_end_mode) write_all_reads_SE(out_fn);
 		else write_all_reads_PE(out_fn);
 	} else {
-		if (joined_pg_len_std) write_all_reads_ORD(out_fn, org_idx_32);
-		else write_all_reads_ORD(out_fn, org_idx_64);
+		if (joined_pg_len_std) write_all_reads_ORD(out_fn, pos_pg_32);
+		else write_all_reads_ORD(out_fn, pos_pg_64);
 	}
 
 	fprintf(stderr, "Decompressed %d reads in total\n", total_reads_count);
