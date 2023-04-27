@@ -157,38 +157,65 @@ void decompress_pg_position(std::istream &in, std::vector<uint_pg_len> &pg_pos,
 	}
 
 	// Paired-end mode
-	bool delta_enabled = (bool) in.get(); // enable delta pair encoding
-	std::vector<uint8_t> offset_in_uint16_flag;
-	std::vector<uint8_t> offset_is_base_first_flag;
-	std::vector<uint16_t> offset_in_uint16_value;
-	pg_pos.reserve(reads_count);
-	read_compressed(in, pg_pos);
-	read_compressed(in, offset_in_uint16_flag);
-	read_compressed(in, offset_is_base_first_flag);
-	read_compressed(in, offset_in_uint16_value);
+	std::vector<uint8_t> offset_flag; // Whether distance between a pair fits in 16 bits
+	std::vector<uint8_t> offset_is_base_first_flag; // Whether distance is positive or negative
+	std::vector<uint16_t> offset_value; // 16-bit value if offset_flag is true
+	// Whether difference between current pair and referential pair is within 16 bits
+	std::vector<uint8_t> delta_flag;
+	std::vector<uint8_t> delta_is_base_first_flag; // Positive or negative
+	std::vector<int16_t> delta_value; // 16-bit value if delta_flag is true
+	std::vector<uint_pg_len> not_base_pair_pos; // 32- or 64-bit value if delta_flag is false
 
-	std::vector<uint8_t> delta_in_int16_flag;
-	std::vector<uint8_t> delta_is_base_first_flag;
-	std::vector<int16_t> delta_in_int16_value;
+	bool delta_enabled = (bool) in.get(); // enable delta pair encoding
+	pg_pos.reserve(reads_count);
+	read_compressed(in, pg_pos); // PG positions of first read from a pair
+	read_compressed(in, offset_flag);
+	read_compressed(in, offset_is_base_first_flag);
+	read_compressed(in, offset_value);
 	if (delta_enabled) {
-		read_compressed(in, delta_in_int16_flag);
+		read_compressed(in, delta_flag);
 		read_compressed(in, delta_is_base_first_flag);
-		read_compressed(in, delta_in_int16_value);
+		read_compressed(in, delta_value);
 	}
-	std::vector<uint_pg_len> not_base_pair_pos;
 	read_compressed(in, not_base_pair_pos);
 
-	// Sort read indexes by PG position
+	// Sort read indexes by PG position, because the encoding of seconds read
+	// from a pair is in such order.
 	int pairs_count = reads_count / 2;
 	std::vector<int> bpp_rank; bpp_rank.reserve(pairs_count);
 	for (int p = 0; p < pairs_count; p++) bpp_rank.push_back(p);
-	std::sort(bpp_rank.begin(), bpp_rank.end(),
-		   [&](const int &l, const int &r) -> bool { return pg_pos[l] < pg_pos[r]; });
+	std::sort(
+			bpp_rank.begin(), bpp_rank.end(),
+			[&](const int &l, const int &r) ->
+			// when same PG position, sort by index
+			bool { return (pg_pos[l] == pg_pos[r] and l < r) or pg_pos[l] < pg_pos[r]; }
+	);
 
+	int64_t off_idx = -1, del_flag_idx = -1, del_idx = -1, nbp_idx = -1;
+	int64_t referential_delta = 0;
+	int64_t prev = 0; bool match = false;
 	pg_pos.resize(reads_count);
 	for (int i = 0; i < pairs_count; i++) {
-		int p = bpp_rank[i];
-
+		int p = bpp_rank[i]; // The original index in FASTQ file
+		int64_t second_pos = 0;
+		if (offset_flag[i]) { // Stream #1
+			int64_t delta = offset_value[++off_idx]; // Stream #3
+			if (offset_is_base_first_flag[off_idx] == 0) delta = -delta; // Stream #2
+			second_pos = pg_pos[p] + delta;
+		} else if (delta_flag[++del_flag_idx]) { // Stream #4
+			int64_t delta = referential_delta + delta_value[++del_idx]; // Stream #6
+			referential_delta = delta; // update referential delta using lastly matched pair
+			match = true; prev = delta;
+			if (delta_is_base_first_flag[del_idx] == 0) delta = -delta; // Stream #5
+			second_pos = pg_pos[p] + delta;
+		} else {
+			second_pos = not_base_pair_pos[++nbp_idx]; // Stream #7
+			int64_t delta = second_pos - pg_pos[p];
+			if (delta < 0) delta = -delta;
+			if ((not match) or referential_delta != prev) referential_delta = delta;
+			match = false; prev = delta;
+		}
+		pg_pos[p + pairs_count] = second_pos;
 	}
 }
 
