@@ -31,6 +31,21 @@ public:
 	bool move_next() override;
 	bool rewind() override;
 	ReadListEntry &peek_read_entry() override { return entry; }
+
+	// Constant access features
+	std::vector<long> pos;
+	std::vector<int> mis_cum_count;
+
+	/**
+	 * Load the exact (not cumulative) location offset and mismatch offset for all reads,
+	 * allowing that constant access for every read. It works for paired-end reads where
+	 * reads can not fetched by sequential iteration.
+	 * Calling this function will increase memory cost.
+	 *
+	 * @param disable_iteration_mode if true, clear cumulative array.
+	 */
+	void enable_constant_access(bool disable_iteration_mode);
+
 };
 
 // Reads List Factories

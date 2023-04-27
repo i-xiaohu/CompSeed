@@ -14,6 +14,30 @@ bool ExtendReadsList::rewind() {
 	return false;
 }
 
+void ExtendReadsList::enable_constant_access(bool disable_iteration_mode) {
+	if (pos.empty()) {
+		pos.reserve(reads_count + 1);
+		long curr_pos = 0;
+		for (int i = 0; i < reads_count; i++) {
+			curr_pos += off[i];
+			pos.push_back(curr_pos);
+		}
+		pos.push_back(pos.back() + read_length);
+	}
+
+	if (disable_iteration_mode) off.clear();
+	if (not mis_cnt.empty()) {
+		mis_cum_count.reserve(reads_count + 1);
+		mis_cum_count.push_back(0);
+		int cum_count = 0;
+		for (int i = 0; i < reads_count; i++) {
+			cum_count += mis_cnt[i];
+			mis_cum_count.push_back(cum_count);
+		}
+		if (disable_iteration_mode) mis_cnt.clear();
+	}
+}
+
 ExtendReadsList* load_extend_reads_list(
 		std::istream &in,
 		int max_read_length,
