@@ -7,9 +7,6 @@
 #include <cstring>
 #include <cassert>
 
-#include "PseudoGenome/PseudoGenomeBase.h"
-#include "PseudoGenome/ReadList/ExtendReadsList.h"
-#include "PseudoGenome/SeparatedPG.h"
 #include "Matching/SimplePgMatcher.h"
 #include "Utils/helper.h"
 

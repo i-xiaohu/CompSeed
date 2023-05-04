@@ -3,6 +3,7 @@ project(pgrc_learn)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+set(EXE "PBM")
 
 set(LZMA
         Utils/LzmaLib.cpp Utils/LzmaLib.h
@@ -25,19 +26,17 @@ set(Matcher
         Matching/SimplePgMatcher.cpp Matching/SimplePgMatcher.h)
 
 set(PseudoGenome
-        PseudoGenome/PseudoGenomeBase.h
+        PseudoGenome/PseudoGenomeHeader.h
         PseudoGenome/SeparatedPG.cpp PseudoGenome/SeparatedPG.h
-        PseudoGenome/ReadList/ExtendIteratorInterface.h
-        PseudoGenome/ReadList/ExtendReadsList.cpp PseudoGenome/ReadList/ExtendReadsList.h)
+        PseudoGenome/ExtendReadsList.cpp PseudoGenome/ExtendReadsList.h)
 
 set(ReadsSet
         ReadsSet/ReadsSetBase.cpp ReadsSet/ReadsSetBase.h)
 
 set(Utils
-        Utils/helper.cpp Utils/helper.h
-)
+        Utils/helper.cpp Utils/helper.h)
 
-add_executable(pgrc_learn
+add_executable(${EXE}
         main.cpp
         ${LZMA}
         ${Matcher}
@@ -47,4 +46,4 @@ add_executable(pgrc_learn
         manager.cpp manager.h
 )
 
-target_link_libraries(pgrc_learn pthread)
+target_link_libraries(${EXE} pthread)
