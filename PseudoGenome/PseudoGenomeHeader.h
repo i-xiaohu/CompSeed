@@ -2,8 +2,8 @@
 // Created by ixiaohu on 2023/4/17.
 //
 
-#ifndef PGRC_LEARN_PSEUDOGENOMEBASE_H
-#define PGRC_LEARN_PSEUDOGENOMEBASE_H
+#ifndef PGRC_LEARN_PSEUDOGENOMEHEADER_H
+#define PGRC_LEARN_PSEUDOGENOMEHEADER_H
 
 #include <fstream>
 #include <cassert>
@@ -39,4 +39,4 @@ public:
 	long get_pg_length() const { return pg_length; }
 };
 
-#endif //PGRC_LEARN_PSEUDOGENOMEBASE_H
+#endif //PGRC_LEARN_PSEUDOGENOMEHEADER_H

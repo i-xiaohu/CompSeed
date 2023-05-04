@@ -3,16 +3,7 @@
 //
 
 #include "ExtendReadsList.h"
-#include "../../Utils/LzmaLib.h"
-
-bool ExtendReadsList::move_next() {
-	return false;
-}
-
-
-bool ExtendReadsList::rewind() {
-	return false;
-}
+#include "../Utils/LzmaLib.h"
 
 void ExtendReadsList::enable_constant_access(bool disable_iteration_mode) {
 	if (pos.empty()) {

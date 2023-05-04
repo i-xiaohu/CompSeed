@@ -7,7 +7,7 @@
 
 #include <iostream>
 #include <vector>
-#include "ReadList/ExtendReadsList.h"
+#include "ExtendReadsList.h"
 
 class SeparatedPseudoGenome {
 private:
