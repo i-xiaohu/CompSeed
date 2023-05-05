@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 set(EXE "PBM")
 
+
 set(LZMA
         Utils/LzmaLib.cpp Utils/LzmaLib.h
         Utils/VarLenDNACoder.cpp Utils/VarLenDNACoder.h
@@ -36,14 +37,43 @@ set(ReadsSet
 set(Utils
         Utils/helper.cpp Utils/helper.h)
 
+set(cstl
+        cstl/kvec.h
+        cstl/khash.h
+        cstl/ksort.h
+        cstl/kbtree.h
+        cstl/kstring.c cstl/kstring.h
+        cstl/kthread.c cstl/kthread.h)
+
+set(FM_index
+        FM_index/bntseq.c FM_index/bntseq.h
+        FM_index/bwt.c FM_index/bwt.h
+        FM_index/bwt_gen.c
+        FM_index/is.c
+        FM_index/QSufSort.c FM_index/QSufSort.h
+        FM_index/rle.c FM_index/rle.h
+        FM_index/rope.c FM_index/rope.h)
+
+set(bwalib
+        bwalib/kseq.h
+        bwalib/bwashm.c
+        bwalib/bwa.c bwalib/bwa.h
+        bwalib/kopen.c bwalib/kopen.h
+        bwalib/ksw.c bwalib/ksw.h
+        bwalib/utils.c bwalib/utils.h)
+
+add_executable(bwa_index
+        ${FM_index}
+        ${bwalib}
+        FM_index/index_main.c)
+target_link_libraries(bwa_index -lz -lrt)
+
 add_executable(${EXE}
-        main.cpp
         ${LZMA}
         ${Matcher}
         ${PseudoGenome}
         ${ReadsSet}
         ${Utils}
         manager.cpp manager.h
-)
-
-target_link_libraries(${EXE} pthread)
+        main.cpp)
+target_link_libraries(${EXE} -lpthread)
