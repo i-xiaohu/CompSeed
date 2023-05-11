@@ -98,8 +98,13 @@ private:
 	bwaidx_t *bwa_idx = nullptr;
 	mem_opt_t *mem_opt = nullptr;
 	smem_aux_t *mem_aux = nullptr;
+
 	int COMP_BATCH_SIZE = 1024; // Process 1024 sorted reads at a time
 	int batch_id = 0;
+	long divergent_column = 0, total_cs_length = 0;
+	int read_with_n = 0, overflow_read = 0;
+	long reseed_count = 0, identical_reseed = 0;
+	long reseed_bin[512] = {0};
 	long original_sal = 0, compressed_sal = 0;
 
 public:
@@ -114,7 +119,9 @@ public:
 
 	void set_index_name(const char *fn) { this->index_name = fn; }
 
-	void traditional_seeding(const std::string &cs, const std::vector<int> &offset, std::vector<std::string> &batch);
+	void traditional_seeding(const std::string &cs, std::vector<long> &offset, std::vector<std::string> &batch);
+
+
 
 	void seeding_SE();
 };

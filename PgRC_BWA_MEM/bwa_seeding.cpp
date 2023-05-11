@@ -14,6 +14,7 @@
 #include "../FM_index/bntseq.h"
 #include "../bwalib/bwa.h"
 #include "../cstl/kvec.h"
+#include "../cstl/kthread.h"
 
 void BWA_seeding::load_all_PGs(std::ifstream &in) {
 	fprintf(stderr, "1. Decompressing HQ reads...\n");
@@ -112,6 +113,18 @@ void BWA_seeding::apply_rc_pair_to_pg(std::vector<uint_pg_len> &pg_pos) {
 	}
 }
 
+const int SEED_MEM = 1;
+const int SEED_REM = 2;
+const int SEED_TEM = 3;
+
+struct re_seed_item {
+	int position;
+	long min_intv;
+	re_seed_item(int p, long m): position(p), min_intv(m) {}
+};
+std::vector<re_seed_item> rs_items;
+int global_offset;
+
 void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a) {
 	int i, k, x = 0, old_n;
 	int start_width = 1;
@@ -123,7 +136,7 @@ void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uin
 			x = bwt_smem1(bwt, len, seq, x, start_width, &a->mem1, a->tmpv);
 			for (i = 0; i < a->mem1.n; ++i) {
 				bwtintv_t *p = &a->mem1.a[i];
-				p->type = 1;
+				p->type = SEED_MEM;
 				int slen = (uint32_t)p->info - (p->info>>32); // seed length
 				if (slen >= opt->min_seed_len)
 					kv_push(bwtintv_t, a->mem, *p);
@@ -137,9 +150,10 @@ void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uin
 		int start = p->info>>32, end = (int32_t)p->info;
 		if (end - start < split_len || p->x[2] > opt->split_width) continue;
 		bwt_smem1(bwt, len, seq, (start + end)>>1, p->x[2]+1, &a->mem1, a->tmpv);
+		rs_items.emplace_back(re_seed_item((start + end) / 2 + global_offset, p->x[2] + 1));
 		for (i = 0; i < a->mem1.n; ++i)
 			if ((uint32_t)a->mem1.a[i].info - (a->mem1.a[i].info>>32) >= opt->min_seed_len) {
-				a->mem1.a[i].type = 2;
+				a->mem1.a[i].type = SEED_REM;
 				kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
 			}
 	}
@@ -150,7 +164,7 @@ void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uin
 			if (seq[x] < 4) {
 				if (1) {
 					bwtintv_t m;
-					m.type = 3;
+					m.type = SEED_TEM;
 					x = bwt_seed_strategy1(bwt, len, seq, x, opt->min_seed_len, opt->max_mem_intv, &m);
 					if (m.x[2] > 0) kv_push(bwtintv_t, a->mem, m);
 				} else { // for now, we never come to this block which is slower
@@ -170,25 +184,60 @@ struct exact_match_t {
 		b(b), e(e), k(k), l(l), s(s) {}
 };
 
-void BWA_seeding::traditional_seeding(const std::string &cs, const std::vector<int> &offset, std::vector<std::string> &batch) {
-//	int os_begin = offset.front(), os_end = offset.back();
-//	for (int i = os_begin; i < os_end + read_length; i++) {
-//		fprintf(stdout, "%c", cs[i]);
-//	}
-//	fprintf(stdout, "\n");
-//	assert(batch.size() == offset.size());
-//	for (int i = 0; i < batch.size(); i++) {
-//		const auto &read = batch[i];
-//		for (int j = 0; j < offset[i]; j++) fprintf(stdout, " ");
-//		for (auto c : read) fprintf(stdout, "%c", c);
-//		fprintf(stdout, "\n");
-//	}
-
-	std::vector<exact_match_t> matches;
+void BWA_seeding::traditional_seeding(const std::string &cs, std::vector<long> &offset, std::vector<std::string> &batch) {
+	// At the very beginning, convert bases into number
 	for (auto &read: batch) {
 		for (int i = 0; i < read.length(); i++) {
-			read[i] = nst_nt4_table[(int)read[i]];
+			read[i] = nst_nt4_table[(int) read[i]];
 		}
+	}
+
+	// Construct graph
+	long os_begin = offset.front(), os_end = offset.back() + read_length;
+	long cs_length = os_end - os_begin;
+	for (auto &o : offset) o -= os_begin; // For convenient access this batch
+	int *coverage = (int*) calloc(cs_length, sizeof(int));
+	uint64_t bit_sentry[4][cs_length]; // Graph representation
+	memset(bit_sentry, 0, sizeof(bit_sentry));
+	std::vector<int8_t> id_of_read(batch.size(), -1); // bit setter of each read
+
+	uint n_id = 0;
+	for (int i = 0; i < batch.size(); i++) {
+		const auto &read = batch[i];
+		bool overflow = false, with_n = false;
+		for (int j = 0; j < read.length(); j++) {
+			with_n |= (read[j] == 4);
+			if (coverage[offset[i] + j] + 1 > 64) {
+				overflow = true;
+				break;
+			}
+		}
+		read_with_n += with_n;
+		overflow_read += overflow;
+		if (with_n or overflow) continue; // Skip this read temporarily
+		for (int j = 0; j < read.length(); j++) coverage[offset[i] + j]++;
+		n_id = (n_id + 1) % 64;
+		id_of_read[i] = n_id;
+		for (int j = 0; j < read.length(); j++) {
+			bit_sentry[read[j]][offset[i] + j] |= (1UL << n_id);
+		}
+	}
+	free(coverage);
+
+	total_cs_length += cs_length;
+	for (int i = 1; i < cs_length; i++) {
+		int cnt = 0;
+		for (int c = 0; c < 4; c++) cnt += (bit_sentry[c][i] > 0);
+		if (cnt > 1) divergent_column++;
+	}
+
+
+	// The original BWA-MEM seeding procedure
+	rs_items.clear();
+	std::vector<exact_match_t> matches;
+	for (int j = 0; j < batch.size(); j++) {
+		const auto &read = batch[j];
+		global_offset = offset[j];
 		mem_collect_intv(mem_opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), mem_aux);
 		for (int i = 0; i < mem_aux->mem.n; i++) {
 			const auto &p = mem_aux->mem.a[i];
@@ -196,15 +245,38 @@ void BWA_seeding::traditional_seeding(const std::string &cs, const std::vector<i
 			matches.emplace_back(exact_match_t(begin, end, p.x[0], p.x[1], p.x[2]));
 		}
 	}
+
+
+	// Look insight into re-seeding
+	reseed_count += rs_items.size();
+	std::sort(rs_items.begin(), rs_items.end(),
+		   [](const re_seed_item &l, const re_seed_item &r) -> bool
+		   { return l.position < r.position; });
+	for (int i = 1; i < rs_items.size(); i++) {
+		if ((rs_items[i].position - rs_items[i-1].position) < 3 and
+		rs_items[i].min_intv == rs_items[i-1].min_intv) {
+			identical_reseed++;
+		}
+	}
+	memset(reseed_bin, 0, sizeof(reseed_bin));
+	for (const auto &item : rs_items) {
+		reseed_bin[item.min_intv]++;
+	}
+	fprintf(stderr, "Batch: %d\n", ++batch_id);
+	for (int i = 0; i < 500; i++) {
+		if (reseed_bin[i] == 0) continue;
+		fprintf(stderr, "s=%d  %.2f\n", i, 100.0 * reseed_bin[i] / rs_items.size());
+	}
+
+
+	// Exploit SAL redundancy
 	std::sort(matches.begin(), matches.end(),
 		   [] (const exact_match_t &l, const exact_match_t &r) -> bool
 		   { return l.k < r.k; });
-
 	for (const auto &m : matches) {
 		int occ = m.s > mem_opt->max_occ ?mem_opt->max_occ :m.s;
 		original_sal += occ;
 	}
-
 	for (int i = 0; i < matches.size(); i++) {
 		const auto &curr = matches[i];
 		int occ = curr.s > mem_opt->max_occ ?mem_opt->max_occ :curr.s;
@@ -219,17 +291,13 @@ void BWA_seeding::traditional_seeding(const std::string &cs, const std::vector<i
 		}
 		compressed_sal += occ;
 	}
-	fprintf(stderr, "Batch: %d\n", ++batch_id);
-	fprintf(stderr, "original SAL:   %ld\n", original_sal);
-	fprintf(stderr, "compressed SAL: %ld\n", compressed_sal);
-	fprintf(stderr, "compression ratio: %.2f\n", 1.0 * original_sal / compressed_sal);
 }
 
 void BWA_seeding::seeding_SE() {
 	char *buffer = new char[read_length * 2]; memset(buffer, 0, read_length * 2);
 	long curr_position = 0, curr_mis_cnt = 0;
 	std::vector<std::string> read_batch;
-	std::vector<int> offset;
+	std::vector<long> offset;
 	for (int i = 0; i < hq_reads_list->reads_count; i++) {
 		curr_position += hq_reads_list->off[i];
 		memcpy(buffer, (hq_pg.data() + curr_position), hq_reads_list->read_length);
@@ -256,9 +324,22 @@ void BWA_seeding::seeding_SE() {
 		}
 	}
 
-	fprintf(stderr, "original SAL:   %ld\n", original_sal);
-	fprintf(stderr, "compressed SAL: %ld\n", compressed_sal);
-	fprintf(stderr, "compression ratio: %.2f\n", 1.0 * original_sal / compressed_sal);
+	fprintf(stderr, "Graph construction: columns %ld, divergent %ld, space %.2f\n",
+		 total_cs_length, divergent_column, 1.0 * total_cs_length / divergent_column);
+
+	fprintf(stderr, "Reads with N %.2f, overflow read %.2f\n",
+		 100.0 * read_with_n / hq_reads_count,
+		 100.0 * overflow_read / hq_reads_count);
+
+	fprintf(stderr, "Re-seeding redundancy: original %ld, identical %ld, percentage %.2f\n",
+		 reseed_count, identical_reseed, 100.0 * identical_reseed / reseed_count);
+	for (int i = 0; i < 500; i++) {
+		if (reseed_bin[i] == 0) continue;
+		fprintf(stderr, "  %.2f\n", 100.0 * reseed_bin[i] / reseed_count);
+	}
+
+	fprintf(stderr, "SAL redundancy: original %ld, compressed SAL %ld, percentage %.2f\n",
+		 original_sal, compressed_sal, 100.0 * (original_sal - compressed_sal) / original_sal);
 
 
 	curr_position = 0;
