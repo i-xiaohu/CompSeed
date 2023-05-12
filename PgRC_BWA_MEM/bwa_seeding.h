@@ -105,6 +105,7 @@ private:
 	int read_with_n = 0, overflow_read = 0;
 	long reseed_count = 0, identical_reseed = 0;
 	long reseed_bin[512] = {0};
+	long tem_count = 0, same_tem = 0, sal_tem = 0;
 	long original_sal = 0, compressed_sal = 0;
 
 public:

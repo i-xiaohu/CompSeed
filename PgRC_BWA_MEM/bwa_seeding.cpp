@@ -235,6 +235,7 @@ void BWA_seeding::traditional_seeding(const std::string &cs, std::vector<long> &
 	// The original BWA-MEM seeding procedure
 	rs_items.clear();
 	std::vector<exact_match_t> matches;
+	std::vector<exact_match_t> tems;
 	for (int j = 0; j < batch.size(); j++) {
 		const auto &read = batch[j];
 		global_offset = offset[j];
@@ -243,6 +244,9 @@ void BWA_seeding::traditional_seeding(const std::string &cs, std::vector<long> &
 			const auto &p = mem_aux->mem.a[i];
 			int begin = p.info >> 32, end = (int)p.info;
 			matches.emplace_back(exact_match_t(begin, end, p.x[0], p.x[1], p.x[2]));
+			if (p.type == SEED_TEM) {
+				tems.emplace_back(exact_match_t(begin + offset[j], end + offset[j], p.x[0], p.x[1], p.x[2]));
+			}
 		}
 	}
 
@@ -258,14 +262,23 @@ void BWA_seeding::traditional_seeding(const std::string &cs, std::vector<long> &
 			identical_reseed++;
 		}
 	}
-	memset(reseed_bin, 0, sizeof(reseed_bin));
 	for (const auto &item : rs_items) {
 		reseed_bin[item.min_intv]++;
 	}
-	fprintf(stderr, "Batch: %d\n", ++batch_id);
-	for (int i = 0; i < 500; i++) {
-		if (reseed_bin[i] == 0) continue;
-		fprintf(stderr, "s=%d  %.2f\n", i, 100.0 * reseed_bin[i] / rs_items.size());
+
+	// Dig the 3rd round seeding redundancy
+	std::sort(tems.begin(), tems.end(),
+		   [](const exact_match_t &l, const exact_match_t &r) -> bool
+		   { return (l.b != r.b) ?(l.b < r.b) :(l.e < r.e); });
+	tem_count += tems.size();
+	for (int i = 1; i < tems.size(); i++) {
+		if (tems[i].b == tems[i-1].b and tems[i].e == tems[i-1].e) {
+			same_tem++;
+		}
+		if ((tems[i].l == tems[i-1].l and tems[i].s == tems[i-1].s) or
+			(tems[i].k == tems[i-1].k and tems[i].s == tems[i-1].s)) {
+			sal_tem++;
+		}
 	}
 
 
@@ -337,6 +350,10 @@ void BWA_seeding::seeding_SE() {
 		if (reseed_bin[i] == 0) continue;
 		fprintf(stderr, "  %.2f\n", 100.0 * reseed_bin[i] / reseed_count);
 	}
+
+	fprintf(stderr, "Third round seeding redundancy: %.2f, with same SAL: %.2f\n",
+		 100.0 * same_tem / tem_count, 100.0 * sal_tem / tem_count);
+
 
 	fprintf(stderr, "SAL redundancy: original %ld, compressed SAL %ld, percentage %.2f\n",
 		 original_sal, compressed_sal, 100.0 * (original_sal - compressed_sal) / original_sal);
