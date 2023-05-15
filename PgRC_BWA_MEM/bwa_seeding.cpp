@@ -306,11 +306,179 @@ void BWA_seeding::traditional_seeding(const std::string &cs, std::vector<long> &
 	}
 }
 
+int BWA_seeding::collect_pivot_smem(const uint8_t *seq, int len, int pivot, int min_hits) {
+	if (seq[pivot] > 3) return pivot + 1;
+	int i;
+	bwtintv_t ik, next[4];
+
+	int t = search_tree[0].children[seq[pivot]];
+	copy_tuple(ik.x, search_tree[t].sa_range2);
+	ik.info = pivot + 1;
+	bwtintv_v *prev = mem_aux->tmpv[0], *curr = mem_aux->tmpv[1];
+
+	curr->n = 0;
+	for (i = pivot + 1; i < len; i++) {
+		if (seq[i] < 4) {
+			int c = 3 - seq[i];
+			if (search_tree[t].children[c] != -1) { // Find the match in SST
+				t = search_tree[t].children[c];
+				copy_tuple(next[c].x, search_tree[t].sa_range2);
+			} else {
+				bwt_extend(bwa_idx->bwt, &ik, next, 0);
+				for (uint8_t j = 0; j < 4; j++) {
+					search_tree[t].children[j] = search_tree.size();
+					search_tree.emplace_back(SST_Node_t(next[j].x));
+				}
+			}
+			if (next[c].x[2] < ik.x[2]) { // shrink of SA interval size
+				kv_push(bwtintv_t, *curr, ik);
+				if (next[c].x[2] < min_hits) break; // SA interval size is tool small to be extended further
+			}
+			ik = next[c];
+			ik.info = i + 1;
+		} else { // 'N' base
+			kv_push(bwtintv_t, *curr, ik);
+			break;
+		}
+	}
+	if (i == len) kv_push(bwtintv_t, *curr, ik);
+	return i;
+}
+
+void BWA_seeding::build_SST(const std::vector<long> &offset, std::vector<std::string> &batch) {
+	// At the very beginning, convert bases into number
+	for (auto &read: batch) {
+		for (int i = 0; i < read.length(); i++) {
+			read[i] = nst_nt4_table[(int) read[i]];
+		}
+	}
+
+	SST_Node_t root; // Root node
+	for (int i = 0; i < 4; i++) root.children[i] = i + 1;
+	search_tree.push_back(root);
+
+	bwtintv_t ik;
+	for (int c = 0; c < 4; c++) { // Enumerating A, C, G, T
+		bwt_set_intv(bwa_idx->bwt, c, ik);
+		search_tree.emplace_back(SST_Node_t(ik.x));
+	}
+
+	// Starting the loop from the last read
+	for (int i = batch.size() - 1; i >= 0; i--) {
+		const auto &read = batch[i];
+		for (int j = 0; j < read.length(); j++) {
+			//
+		}
+	}
+
+	exit(EXIT_SUCCESS);
+}
+
+
+int BWA_seeding::show_smem_search(const uint8_t *q, int len, int pivot, int min_hits, std::vector<bwtintv_t> &ans) {
+	if (q[pivot] > 3) return pivot + 1;
+	bwtintv_t ik, ok[4];
+	bwt_set_intv(bwa_idx->bwt, q[pivot], ik);
+	ik.info = pivot + 1;
+
+	std::vector<bwtintv_t> prev, curr;
+	int i, j, c, next_pivot;
+	prev.clear();
+	for (i = pivot + 1; i < len; i++) {
+		if (q[i] < 4) {
+			c = 3 - q[i];
+			bwt_extend(bwa_idx->bwt, &ik, ok, 0);
+			if (ok[c].x[2] < ik.x[2]) {
+				prev.push_back(ik);
+				if (ok[c].x[2] < min_hits) break;
+			}
+			ik = ok[c]; ik.info = i + 1;
+		} else {
+			prev.push_back(ik);
+			break;
+		}
+	}
+	if (i == len) prev.push_back(ik);
+	std::reverse(prev.begin(), prev.end()); // From the longest one
+	next_pivot = i;
+
+	fprintf(stdout, "Forward Search Process with pivot %d\n", pivot);
+	for (const auto &p : prev) {
+		int end = (int)p.info;
+		for (i = 0; i < pivot; i++) fprintf(stdout, " ");
+		for (i = pivot; i < end; i++) fprintf(stdout, "%c", "ACGTN"[q[i]]);
+		for (i = end; i < len; i++) fprintf(stdout, " ");
+		fprintf(stdout, "\t%d\t%ld\t%ld\t%ld\n", end - pivot, p.x[0], p.x[1], p.x[2]);
+	}
+
+	ans.clear();
+	for (i = pivot - 1; i >= -1; i--) {
+		c = (i == -1) ?4 :q[i];
+		curr.clear();
+		for (j = 0; j < prev.size(); j++) {
+			ik = prev[j];
+			if (c < 4) bwt_extend(bwa_idx->bwt, &ik, ok, 1);
+			if (c > 3 or ok[c].x[2] < min_hits) {
+				assert(curr.empty());
+				// Keep it if not contained by a longer MEM
+				if (ans.empty() or i + 1 < (ans.front().info >> 32)) {
+					ik.info |= ((uint64_t)(i + 1) << 32U);
+					ans.push_back(ik);
+				}
+			} else {
+				// Extend this match further if it is not equivalent to another longer match
+				if (curr.empty() or ok[c].x[2] > curr.front().x[2]) {
+					ok[c].info = ik.info;
+					curr.push_back(ok[c]);
+				}
+			}
+		}
+		if (curr.empty()) break;
+		std::swap(prev, curr);
+	}
+	return next_pivot;
+}
+
+void BWA_seeding::view_some_cases(const std::vector<long> &offset, std::vector<std::string> &batch) {
+	for (auto &read: batch) {
+		for (int i = 0; i < read.length(); i++) {
+			read[i] = nst_nt4_table[(int) read[i]];
+		}
+	}
+
+
+	std::vector<bwtintv_t> mems;
+	// Observe the first 5 reads
+	for (int i = 0; i < 100; i++) {
+		const auto &read = batch[i];
+//		for (int j = 0; j < offset[i]; j++) fprintf(stdout, " ");
+		for (int j = 0; j < read.length(); j++) fprintf(stdout, "%c", "ACGTN"[read[j]]);
+		fprintf(stdout, "\n");
+
+		int x = 0;
+		while (x < read.length()) {
+			x = show_smem_search((uint8_t *) read.c_str(), read.length(), x, 1, mems);
+//			fprintf(stdout, "next pivot %d\n", x);
+//			for (const auto &m : mems) {
+//				int32_t start = m.info >> 32, end = (int32_t)m.info;
+//				for (int j = 0; j < offset[i]; j++) fprintf(stdout, " ");
+//				for (int j = 0; j < start; j++) fprintf(stdout, " ");
+//				for (int j = start; j < end; j++) fprintf(stdout, "%c", "ACGTN"[read[j]]);
+//				fprintf(stdout, "\n");
+//			}
+		}
+		fprintf(stdout, "\n");
+	}
+	exit(EXIT_SUCCESS);
+}
+
 void BWA_seeding::seeding_SE() {
-	char *buffer = new char[read_length * 2]; memset(buffer, 0, read_length * 2);
-	long curr_position = 0, curr_mis_cnt = 0;
 	std::vector<std::string> read_batch;
 	std::vector<long> offset;
+
+	// Decompressing HQ Reads
+	char *buffer = new char[read_length * 2]; memset(buffer, 0, read_length * 2);
+	long curr_position = 0, curr_mis_cnt = 0;
 	for (int i = 0; i < hq_reads_list->reads_count; i++) {
 		curr_position += hq_reads_list->off[i];
 		memcpy(buffer, (hq_pg.data() + curr_position), hq_reads_list->read_length);
@@ -331,58 +499,21 @@ void BWA_seeding::seeding_SE() {
 		read_batch.emplace_back(std::string(buffer));
 		offset.push_back(curr_position);
 		if (read_batch.size() >= COMP_BATCH_SIZE or i == hq_reads_list->reads_count - 1) {
-			traditional_seeding(hq_pg, offset, read_batch);
+//			build_SST(offset, read_batch);
+			view_some_cases(offset, read_batch);
 			read_batch.clear();
 			offset.clear();
 		}
 	}
 
-	fprintf(stderr, "Graph construction: columns %ld, divergent %ld, space %.2f\n",
-		 total_cs_length, divergent_column, 1.0 * total_cs_length / divergent_column);
-
-	fprintf(stderr, "Reads with N %.2f, overflow read %.2f\n",
-		 100.0 * read_with_n / hq_reads_count,
-		 100.0 * overflow_read / hq_reads_count);
-
-	fprintf(stderr, "Re-seeding redundancy: original %ld, identical %ld, percentage %.2f\n",
-		 reseed_count, identical_reseed, 100.0 * identical_reseed / reseed_count);
-	for (int i = 0; i < 500; i++) {
-		if (reseed_bin[i] == 0) continue;
-		fprintf(stderr, "  %.2f\n", 100.0 * reseed_bin[i] / reseed_count);
-	}
-
-	fprintf(stderr, "Third round seeding redundancy: %.2f, with same SAL: %.2f\n",
-		 100.0 * same_tem / tem_count, 100.0 * sal_tem / tem_count);
-
-
-	fprintf(stderr, "SAL redundancy: original %ld, compressed SAL %ld, percentage %.2f\n",
-		 original_sal, compressed_sal, 100.0 * (original_sal - compressed_sal) / original_sal);
-
-
-	curr_position = 0;
-	auto *coverage = new int[hq_pg.length()];
-	memset(coverage, 0, hq_pg.length() * sizeof(int));
-	assert(hq_reads_list->off[0] == 0);
-	for (int i = 0; i < hq_reads_list->reads_count; i++) {
-		curr_position += hq_reads_list->off[i];
-		for (int j = 0; j < hq_reads_list->read_length; j++) {
-			coverage[curr_position + j]++;
-		}
-	}
-	int fraction = 0;
-	for (int i = 0; i < hq_pg.length(); i++) {
-		if (coverage[i] > 64) fraction++;
-	}
-	fprintf(stderr, "Coverage > 64: %.2f\n", 100.0 * fraction / hq_pg.length());
-	delete [] coverage;
-
-
+	// Restoring LQ reads
 	curr_position = 0;
 	for (int i = 0; i < lq_reads_list->reads_count; i++) {
 		curr_position += lq_reads_list->off[i];
 		memcpy(buffer, (lq_pg.data() + curr_position), lq_reads_list->read_length);
 	}
 
+	// Restoring N reads
 	curr_position = 0;
 	for (int i = 0; i < n_reads_list->reads_count; i++) {
 		curr_position += n_reads_list->off[i];

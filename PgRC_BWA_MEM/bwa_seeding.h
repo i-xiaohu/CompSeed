@@ -58,6 +58,25 @@ typedef struct {
 	int8_t mat[25];         // scoring matrix; mat[0] == 0 if unset
 } mem_opt_t;
 
+/** SMEM Search Tree (SST) Node */
+struct SST_Node_t {
+	bwtint_t sa_range2[3]; // Suffix Array Interval of FMD-Index
+	int children[4]; // Indexes of four children A,C,G,T
+
+	SST_Node_t() {
+		sa_range2[0] = sa_range2[1] = sa_range2[2] = 0;
+		children[0] = children[1] = children[2] = children[3] = -1;
+	}
+
+	SST_Node_t(const bwtint_t *x) {
+		sa_range2[0] = x[0];
+		sa_range2[1] = x[1];
+		sa_range2[2] = x[2];
+		children[0] = children[1] = children[2] = children[3] = -1;
+	}
+
+};
+
 class BWA_seeding {
 private:
 	std::string archive_name;
@@ -108,6 +127,13 @@ private:
 	long tem_count = 0, same_tem = 0, sal_tem = 0;
 	long original_sal = 0, compressed_sal = 0;
 
+	// Construct a SMEM Searching Tree
+	std::vector<SST_Node_t> search_tree;
+
+	inline void copy_tuple(bwtint_t *x, const bwtint_t *y) {
+		x[0] = y[0]; x[1] = y[1]; x[2] = y[2];
+	}
+
 public:
 	void set_archive_name(const char *fn) { this->archive_name = fn; }
 
@@ -122,7 +148,13 @@ public:
 
 	void traditional_seeding(const std::string &cs, std::vector<long> &offset, std::vector<std::string> &batch);
 
+	void build_SST(const std::vector<long> &offset, std::vector<std::string> &batch);
 
+	int collect_pivot_smem(const uint8_t *seq, int len, int pivot, int min_hits);
+
+	int show_smem_search(const uint8_t *q, int len, int pivot, int min_hits, std::vector<bwtintv_t> &ans);
+
+	void view_some_cases(const std::vector<long> &offset, std::vector<std::string> &batch);
 
 	void seeding_SE();
 };
