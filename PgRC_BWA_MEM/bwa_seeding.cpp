@@ -374,102 +374,140 @@ void BWA_seeding::build_SST(const std::vector<long> &offset, std::vector<std::st
 	exit(EXIT_SUCCESS);
 }
 
-
-int BWA_seeding::show_smem_search(const uint8_t *q, int len, int pivot, int min_hits, std::vector<bwtintv_t> &ans) {
-	if (q[pivot] > 3) return pivot + 1;
-	bwtintv_t ik, ok[4];
-	bwt_set_intv(bwa_idx->bwt, q[pivot], ik);
+int BWA_seeding::collect_smem_with_lep(const uint8_t *seq, int len, long os, int pivot, int min_hits, std::vector<bwtintv_t> &ans) {
+	if (seq[pivot] > 3) return pivot + 1;
+	bwtintv_t ik, next[4];
+	bwt_set_intv(bwa_idx->bwt, seq[pivot], ik);
 	ik.info = pivot + 1;
-
 	std::vector<bwtintv_t> prev, curr;
-	int i, j, c, next_pivot;
-	prev.clear();
-	for (i = pivot + 1; i < len; i++) {
-		if (q[i] < 4) {
-			c = 3 - q[i];
-			bwt_extend(bwa_idx->bwt, &ik, ok, 0);
-			if (ok[c].x[2] < ik.x[2]) {
+	int ret_pivot = len;
+	for (int i = pivot + 1; i < len; i++) {
+		if (seq[i] < 4) {
+			bwt_extend(bwa_idx->bwt, &ik, next, 0);
+			int c = 3 - seq[i];
+			if (next[c].x[2] != ik.x[2]) {
+				assert(ik.info == i);
+				LEPs.push_back(os + i - 1);
 				prev.push_back(ik);
-				if (ok[c].x[2] < min_hits) break;
+				if (next[c].x[2] < min_hits) {
+					ret_pivot = i;
+					break;
+				}
 			}
-			ik = ok[c]; ik.info = i + 1;
+			ik = next[c];
+			ik.info = i + 1;
 		} else {
 			prev.push_back(ik);
+			ret_pivot = i + 1;
 			break;
 		}
 	}
-	if (i == len) prev.push_back(ik);
-	std::reverse(prev.begin(), prev.end()); // From the longest one
-	next_pivot = i;
-
-	fprintf(stdout, "Forward Search Process with pivot %d\n", pivot);
-	for (const auto &p : prev) {
-		int end = (int)p.info;
-		for (i = 0; i < pivot; i++) fprintf(stdout, " ");
-		for (i = pivot; i < end; i++) fprintf(stdout, "%c", "ACGTN"[q[i]]);
-		for (i = end; i < len; i++) fprintf(stdout, " ");
-		fprintf(stdout, "\t%d\t%ld\t%ld\t%ld\n", end - pivot, p.x[0], p.x[1], p.x[2]);
-	}
+	if (ret_pivot == len) prev.push_back(ik);
+	std::reverse(prev.begin(), prev.end());
 
 	ans.clear();
-	for (i = pivot - 1; i >= -1; i--) {
-		c = (i == -1) ?4 :q[i];
+	for (int i = pivot - 1; i >= -1; i--) {
+		int c = (i == -1) ?4 :seq[i];
 		curr.clear();
-		for (j = 0; j < prev.size(); j++) {
-			ik = prev[j];
-			if (c < 4) bwt_extend(bwa_idx->bwt, &ik, ok, 1);
-			if (c > 3 or ok[c].x[2] < min_hits) {
+		for (auto &p : prev) {
+			if (c < 4) bwt_extend(bwa_idx->bwt, &p, next, 1);
+			if (c > 3 or next[c].x[2] < min_hits) {
 				assert(curr.empty());
-				// Keep it if not contained by a longer MEM
-				if (ans.empty() or i + 1 < (ans.front().info >> 32)) {
-					ik.info |= ((uint64_t)(i + 1) << 32U);
-					ans.push_back(ik);
+				if (ans.empty() or i + 1 < ans.back().info >> 32) {
+					p.info |= (1UL * (i + 1) << 32);
+					ans.push_back(p);
 				}
 			} else {
-				// Extend this match further if it is not equivalent to another longer match
-				if (curr.empty() or ok[c].x[2] > curr.front().x[2]) {
-					ok[c].info = ik.info;
-					curr.push_back(ok[c]);
+				if (curr.empty() or next[c].x[2] != curr.back().x[2]) {
+					next[c].info = p.info;
+					curr.push_back(next[c]);
 				}
 			}
 		}
 		if (curr.empty()) break;
 		std::swap(prev, curr);
 	}
-	return next_pivot;
+	return ret_pivot;
+}
+
+static inline bool mem_cmp(const bwtintv_t &a, const bwtintv_t &b) {
+	return a.info < b.info;
 }
 
 void BWA_seeding::view_some_cases(const std::vector<long> &offset, std::vector<std::string> &batch) {
-	for (auto &read: batch) {
-		for (int i = 0; i < read.length(); i++) {
-			read[i] = nst_nt4_table[(int) read[i]];
+	for (int i = 0; i < batch.size(); i++) {
+		auto &read = batch[i];
+		for (int j = 0; j < read.length(); j++) {
+			read[j] = nst_nt4_table[(int) read[j]];
+		}
+		std::vector<bwtintv_t> smems;
+		for (int j = 0; j < read.length(); ) {
+			std::vector<bwtintv_t> mems;
+			j = collect_smem_with_lep((const uint8_t*)read.c_str(), read.length(), offset[i], j, 1, mems);
+			for (const auto &m : mems) {
+				if ((int)m.info - (m.info >> 32) >= mem_opt->min_seed_len) {
+					smems.push_back(m);
+				}
+			}
+		}
+
+		int old_n = (int)smems.size();
+		for (int j = 0; j < old_n; j++) {
+			const auto &m = smems[j] ;
+			int start = m.info >> 32, end = (int)m.info;
+			if (end - start < (int)(mem_opt->min_seed_len * mem_opt->split_factor + .499)
+				or m.x[2] > mem_opt->split_width) continue;
+			std::vector<bwtintv_t> mems;
+			collect_smem_with_lep((const uint8_t*)read.c_str(), read.length(), offset[i], (end + start) / 2, m.x[2] + 1, mems);
+			for (const auto &rem : mems) {
+				if ((int)rem.info - (rem.info >> 32) >= mem_opt->min_seed_len) {
+					smems.push_back(rem);
+				}
+			}
+		}
+
+		if (mem_opt->max_mem_intv > 0) {
+			for (int j = 0; j < read.length(); ) {
+				if (read[j] < 4) {
+					bwtintv_t m;
+					j = bwt_seed_strategy1(bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), j, mem_opt->min_seed_len, mem_opt->max_mem_intv, &m);
+					if (m.x[2] > 0) smems.push_back(m);
+				} else {
+					j++;
+				}
+			}
+		}
+
+		std::vector<bwtintv_t> bwa_smems;
+		mem_collect_intv(mem_opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), mem_aux);
+		for (int j = 0; j < mem_aux->mem.n; j++) {
+			bwa_smems.push_back(mem_aux->mem.a[j]);
+		}
+
+		if (bwa_smems.size() != smems.size()) {
+			fprintf(stderr, "Read: %d\n", i + 1);
+
+			fprintf(stderr, "bwa_smems.size() = %ld\n", bwa_smems.size());
+			for (const auto &p : bwa_smems) {
+				fprintf(stderr, "  [%d,%d) x=[%ld,%ld,%ld]\n", p.info>>32, (int)p.info, p.x[0], p.x[1], p.x[2]);
+			}
+
+			fprintf(stderr, "smems.size()     = %ld\n", smems.size());
+			for (const auto &p : smems) {
+				fprintf(stderr, "  [%d,%d) x=[%ld,%ld,%ld]\n", p.info>>32, (int)p.info, p.x[0], p.x[1], p.x[2]);
+			}
+		}
+		assert(bwa_smems.size() == smems.size());
+		std::sort(smems.begin(), smems.end(), mem_cmp);
+		std::sort(bwa_smems.begin(), bwa_smems.end(), mem_cmp);
+		for (int j = 0; j < smems.size(); j++) {
+			const auto &a = smems[j], &b = bwa_smems[j];
+			assert(a.info == b.info);
+			assert(a.x[0] == b.x[0]);
+			assert(a.x[1] == b.x[1]);
+			assert(a.x[2] == b.x[2]);
 		}
 	}
-
-
-	std::vector<bwtintv_t> mems;
-	// Observe the first 5 reads
-	for (int i = 0; i < 100; i++) {
-		const auto &read = batch[i];
-//		for (int j = 0; j < offset[i]; j++) fprintf(stdout, " ");
-		for (int j = 0; j < read.length(); j++) fprintf(stdout, "%c", "ACGTN"[read[j]]);
-		fprintf(stdout, "\n");
-
-		int x = 0;
-		while (x < read.length()) {
-			x = show_smem_search((uint8_t *) read.c_str(), read.length(), x, 1, mems);
-//			fprintf(stdout, "next pivot %d\n", x);
-//			for (const auto &m : mems) {
-//				int32_t start = m.info >> 32, end = (int32_t)m.info;
-//				for (int j = 0; j < offset[i]; j++) fprintf(stdout, " ");
-//				for (int j = 0; j < start; j++) fprintf(stdout, " ");
-//				for (int j = start; j < end; j++) fprintf(stdout, "%c", "ACGTN"[read[j]]);
-//				fprintf(stdout, "\n");
-//			}
-		}
-		fprintf(stdout, "\n");
-	}
-	exit(EXIT_SUCCESS);
 }
 
 void BWA_seeding::seeding_SE() {
@@ -505,6 +543,13 @@ void BWA_seeding::seeding_SE() {
 			offset.clear();
 		}
 	}
+
+	std::sort(LEPs.begin(), LEPs.end());
+	int same_lep = 0;
+	for (int i = 1; i < LEPs.size(); i++) {
+		if (LEPs[i] == LEPs[i-1]) same_lep++;
+	}
+	fprintf(stderr, "Same LEP: %.2f %%\n", 100.0 * same_lep / LEPs.size());
 
 	// Restoring LQ reads
 	curr_position = 0;

@@ -152,7 +152,8 @@ public:
 
 	int collect_pivot_smem(const uint8_t *seq, int len, int pivot, int min_hits);
 
-	int show_smem_search(const uint8_t *q, int len, int pivot, int min_hits, std::vector<bwtintv_t> &ans);
+	std::vector<long> LEPs;
+	int collect_smem_with_lep(const uint8_t *seq, int len, long os, int pivot, int min_hits, std::vector<bwtintv_t> &ans);
 
 	void view_some_cases(const std::vector<long> &offset, std::vector<std::string> &batch);
 
