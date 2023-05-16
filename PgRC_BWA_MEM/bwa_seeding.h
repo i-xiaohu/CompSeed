@@ -60,21 +60,44 @@ typedef struct {
 
 /** SMEM Search Tree (SST) Node */
 struct SST_Node_t {
-	bwtint_t sa_range2[3]; // Suffix Array Interval of FMD-Index
+	bwtintv_t match; // SA interval in FMD-index
 	int children[4]; // Indexes of four children A,C,G,T
+	SST_Node_t() { children[0] = children[1] = children[2] = children[3] = -1; }
+};
 
-	SST_Node_t() {
-		sa_range2[0] = sa_range2[1] = sa_range2[2] = 0;
-		children[0] = children[1] = children[2] = children[3] = -1;
-	}
+class SST {
+private:
+	std::vector<SST_Node_t> nodes;
+	bwt_t *bwt;
+	bwtintv_t next[4];
 
-	SST_Node_t(const bwtint_t *x) {
-		sa_range2[0] = x[0];
-		sa_range2[1] = x[1];
-		sa_range2[2] = x[2];
-		children[0] = children[1] = children[2] = children[3] = -1;
-	}
+public:
+	std::string monitor;
+	explicit SST(bwt_t *b);
 
+	/** At parent node with prefix p, query child node for p + base.
+	 * If the child node does not exist, query it from FMD-index. */
+	int query_child(int parent, uint8_t base, bool is_back);
+
+	/** Add [pivot, LEP] to backward SST. But SA interval of suffixes is unknown.
+	 * Use {0,0,0} to mark such nodes in SST. */
+	int add_lep_child(int parent, uint8_t base, const uint64_t *x);
+
+	int add_empty_child(int parent, uint8_t base);
+
+	inline bwtintv_t get_intv(int id) { return nodes[id].match; }
+
+	inline int get_child(int parent, uint8_t base) { return nodes[parent].children[base]; }
+
+	/** Only keep root and its four children */
+	void clear() { nodes.resize(5); }
+};
+
+struct thread_aux_t {
+	std::vector<int> prev, curr; // Buffer for SST node indexes
+	std::vector<bwtintv_t> lep; // Left extension points
+	std::vector<bwtintv_t> mem; // Storing all SMEMs
+	std::vector<bwtintv_t> ans; // Storing all SMEMs with length >= minimal seed length
 };
 
 class BWA_seeding {
@@ -117,22 +140,14 @@ private:
 	bwaidx_t *bwa_idx = nullptr;
 	mem_opt_t *mem_opt = nullptr;
 	smem_aux_t *mem_aux = nullptr;
+	thread_aux_t thr_aux;
 
 	int COMP_BATCH_SIZE = 1024; // Process 1024 sorted reads at a time
 	int batch_id = 0;
-	long divergent_column = 0, total_cs_length = 0;
-	int read_with_n = 0, overflow_read = 0;
-	long reseed_count = 0, identical_reseed = 0;
-	long reseed_bin[512] = {0};
-	long tem_count = 0, same_tem = 0, sal_tem = 0;
-	long original_sal = 0, compressed_sal = 0;
+	int read_with_n = 0;
 
-	// Construct a SMEM Searching Tree
-	std::vector<SST_Node_t> search_tree;
-
-	inline void copy_tuple(bwtint_t *x, const bwtint_t *y) {
-		x[0] = y[0]; x[1] = y[1]; x[2] = y[2];
-	}
+	SST *forward_sst = nullptr;
+	SST *backward_sst = nullptr;
 
 public:
 	void set_archive_name(const char *fn) { this->archive_name = fn; }
@@ -146,16 +161,9 @@ public:
 
 	void set_index_name(const char *fn) { this->index_name = fn; }
 
-	void traditional_seeding(const std::string &cs, std::vector<long> &offset, std::vector<std::string> &batch);
+	int collect_smem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux_t &aux);
 
-	void build_SST(const std::vector<long> &offset, std::vector<std::string> &batch);
-
-	int collect_pivot_smem(const uint8_t *seq, int len, int pivot, int min_hits);
-
-	std::vector<long> LEPs;
-	int collect_smem_with_lep(const uint8_t *seq, int len, long os, int pivot, int min_hits, std::vector<bwtintv_t> &ans);
-
-	void view_some_cases(const std::vector<long> &offset, std::vector<std::string> &batch);
+	void test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch);
 
 	void seeding_SE();
 };
