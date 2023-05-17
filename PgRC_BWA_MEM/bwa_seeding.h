@@ -156,6 +156,9 @@ private:
 	SST *forward_sst = nullptr;
 	SST *backward_sst = nullptr;
 
+	double comp_cpu_time = 0, comp_real_time = 0;
+	double bwa_cpu_time = 0, bwa_real_time = 0;
+
 public:
 	void set_archive_name(const char *fn) { this->archive_name = fn; }
 
@@ -169,6 +172,8 @@ public:
 	void set_index_name(const char *fn) { this->index_name = fn; }
 
 	int collect_smem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux_t &aux);
+
+	int tem_forward_sst(const uint8_t *seq, int len, int start, int min_len, int max_intv, bwtintv_t *mem);
 
 	void test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch);
 

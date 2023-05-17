@@ -15,6 +15,7 @@
 #include "../bwalib/bwa.h"
 #include "../cstl/kvec.h"
 #include "../cstl/kthread.h"
+#include "../bwalib/utils.h"
 
 void BWA_seeding::load_all_PGs(std::ifstream &in) {
 	fprintf(stderr, "1. Decompressing HQ reads...\n");
@@ -111,6 +112,57 @@ void BWA_seeding::apply_rc_pair_to_pg(std::vector<uint_pg_len> &pg_pos) {
 			}
 		}
 	}
+}
+
+mem_opt_t *mem_opt_init() {
+	auto *o = (mem_opt_t*) calloc(1, sizeof(mem_opt_t));
+	o->flag = 0;
+	o->a = 1; o->b = 4;
+	o->o_del = o->o_ins = 6;
+	o->e_del = o->e_ins = 1;
+	o->w = 100;
+	o->T = 30;
+	o->zdrop = 100;
+	o->pen_unpaired = 17;
+	o->pen_clip5 = o->pen_clip3 = 5;
+
+	o->max_mem_intv = 20;
+
+	o->min_seed_len = 19;
+	o->split_width = 10;
+	o->max_occ = 500;
+	o->max_chain_gap = 10000;
+	o->max_ins = 10000;
+	o->mask_level = 0.50;
+	o->drop_ratio = 0.50;
+	o->XA_drop_ratio = 0.80;
+	o->split_factor = 1.5;
+	o->chunk_size = 10000000;
+	o->n_threads = 1;
+	o->max_XA_hits = 5;
+	o->max_XA_hits_alt = 200;
+	o->max_matesw = 50;
+	o->mask_level_redun = 0.95;
+	o->min_chain_weight = 0;
+	o->max_chain_extend = 1<<30;
+	o->mapQ_coef_len = 50; o->mapQ_coef_fac = log(o->mapQ_coef_len);
+	bwa_fill_scmat(o->a, o->b, o->mat);
+	return o;
+}
+
+smem_aux_t *smem_aux_init() {
+	smem_aux_t *a;
+	a = (smem_aux_t*) calloc(1, sizeof(smem_aux_t));
+	a->tmpv[0] = (bwtintv_v*) calloc(1, sizeof(bwtintv_v));
+	a->tmpv[1] = (bwtintv_v*) calloc(1, sizeof(bwtintv_v));
+	return a;
+}
+
+void smem_aux_destroy(smem_aux_t *a) {
+	free(a->tmpv[0]->a); free(a->tmpv[0]);
+	free(a->tmpv[1]->a); free(a->tmpv[1]);
+	free(a->mem.a); free(a->mem1.a);
+	free(a);
 }
 
 void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a) {
@@ -213,7 +265,6 @@ static bool check_mem(const bwt_t *bwt, const std::string &s, const bwtintv_t &r
 }
 
 int SST::add_lep_child(int parent, uint8_t base, const uint64_t *x) {
-	monitor.push_back("ACGT"[base]);
 	auto &p = nodes[parent];
 	if (p.children[base] == -1) {
 		p.children[base] = (int)nodes.size();
@@ -228,9 +279,7 @@ int SST::add_lep_child(int parent, uint8_t base, const uint64_t *x) {
 			c.match.x[0] = x[0];
 			c.match.x[1] = x[1];
 			c.match.x[2] = x[2];
-			assert(check_mem(bwt, monitor, c.match));
 		} else {
-			assert(check_mem(bwt, monitor, c.match));
 			for (int i = 0; i < 3; i++) {
 				assert(c.match.x[i] == x[i]);
 			}
@@ -250,7 +299,6 @@ static bool check_mem(const bwt_t *bwt, const uint8_t *seq, int start, int end, 
 }
 
 int SST::add_empty_child(int parent, uint8_t base) {
-	monitor.push_back("ACGT"[base]);
 	auto &p = nodes[parent];
 	if (p.children[base] == -1) {
 		p.children[base] = (int)nodes.size();
@@ -279,6 +327,7 @@ static void dfs_print_tree(SST *tree, int node, std::string &prefix) {
 }
 
 int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux_t &aux) {
+	aux.mem.clear();
 	if (seq[pivot] > 3) return pivot + 1;
 	bwtintv_t ik, next[4];
 	int node_id = forward_sst->query_child(0, seq[pivot], true);
@@ -308,18 +357,10 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 	}
 	if (ret_pivot == len) aux.prev_intv.push_back(ik);
 	std::reverse(aux.prev_intv.begin(), aux.prev_intv.end());
-	for (const auto &m : aux.prev_intv) {
-		assert(check_mem(bwa_idx->bwt, seq, pivot, m.info, m));
-	}
 
 	// Collect node indexes for LEPs in backward SST
-//	for (int i = 0; i < len; i++) fprintf(stderr, "%c", "ACGTN"[seq[i]]); fprintf(stderr, "\n");
 	aux.prev_node.clear();
 	for (const auto &p : aux.prev_intv) {
-		int start = pivot, end = (int)p.info;
-//		fprintf(stderr, "LEP [%d, %d] [%ld, %ld, %ld]\n", start, end, p.x[0], p.x[1], p.x[2]);
-//		for (int i = start; i < end; i++) fprintf(stderr, "%c", "ACGT"[seq[i]]); fprintf(stderr, "\n");
-
 		node_id = 0;
 		backward_sst->monitor.clear();
 		for (int i = (int)p.info - 1; i >= pivot + 1; i--) {
@@ -329,7 +370,6 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 		aux.prev_node.push_back(node_id);
 	}
 
-	aux.mem.clear();
 	for (int i = pivot - 1; i >= -1; i--) {
 		int c = (i == -1) ?4 :seq[i];
 		aux.curr_intv.clear(); aux.curr_node.clear();
@@ -341,14 +381,6 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 				next[c] = backward_sst->get_intv(node_id);
 			}
 			if (c > 3 or next[c].x[2] < min_hits) {
-				if (not aux.curr_intv.empty()) {
-					fprintf(stderr, "Left extend from [%d, %d] [%ld, %ld, %ld] to [%d, %d] [%ld, %ld, %ld]\n",
-						 i + 1, (int) ik.info, ik.x[0], ik.x[1], ik.x[2],
-						 i, (int) ik.info, next[c].x[0], next[c].x[1], next[c].x[2]);
-					for (const auto &a : aux.curr_intv) {
-						fprintf(stderr, "[%d, %d] [%ld, %ld, %ld]\n", i, (int)a.info, a.x[0], a.x[1], a.x[2]);
-					}
-				}
 				assert(aux.curr_intv.empty() and aux.curr_node.empty());
 				if (aux.mem.empty() or i + 1 < aux.mem.back().info >> 32) {
 					ik.info |= (1UL * (i + 1) << 32);
@@ -366,25 +398,63 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 		std::swap(aux.prev_intv, aux.curr_intv);
 		std::swap(aux.prev_node, aux.curr_node);
 	}
-
-	for (const auto &p : aux.mem) {
-		int start = (int)(p.info >> 32), end = (int)p.info;
-//		fprintf(stderr, "[%d, %d) [%ld, %ld, %ld]\n", start, end, p.x[0], p.x[1], p.x[2]);
-		assert(check_mem(bwa_idx->bwt, seq, start, end, p));
-	}
 	return ret_pivot;
+}
+
+int BWA_seeding::tem_forward_sst(const uint8_t *seq, int len, int start, int min_len, int max_intv, bwtintv_t *mem) {
+	if (seq[start] > 3) return start + 1;
+	memset(mem, 0, sizeof(bwtintv_t));
+	int node_id = forward_sst->query_child(0, seq[start], true);
+	bwtintv_t ik = forward_sst->get_intv(node_id);
+	for (int i = start + 1; i < len; i++) {
+		if (seq[i] < 4) {
+			int c = 3 - seq[i];
+			node_id = forward_sst->query_child(node_id, c, false);
+			ik = forward_sst->get_intv(node_id);
+			if (ik.x[2] < max_intv && i - start >= min_len) {
+				*mem = ik;
+				mem->info = (1UL * start << 32) | (i + 1);
+				return i + 1;
+			}
+		} else return i + 1;
+	}
+	return len;
+}
+
+static inline bool mem_cmp(const bwtintv_t &a, const bwtintv_t &b) {
+	return a.info < b.info;
+}
+
+static inline bool mem_eq(const bwtintv_t &a, const bwtintv_t &b) {
+	return a.info == b.info and a.x[0] == b.x[0] and
+		a.x[1] == b.x[1] and a.x[2] == b.x[2];
+}
+
+static std::string mem_str(const bwtintv_t &a) {
+	char buf[256];
+	sprintf(buf, "[%d, %d) [%ld, %ld, %ld]", a.info>>32, (int)a.info, a.x[0], a.x[1], a.x[2]);
+	return std::string(buf);
 }
 
 void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch) {
 	forward_sst->clear(); backward_sst->clear();
-	for (int i = 0; i < batch.size(); i++) {
+	for (int i = batch.size() - 1; i >= 0; i--) {
 		auto &read = batch[i];
 		for (int j = 0; j < read.length(); j++) {
 			read[j] = nst_nt4_table[(int) read[j]];
 		}
-		std::vector<bwtintv_t> smems;
+		double cpu_start, cpu_end, real_start, real_end;
+		cpu_start = cputime(); real_start = realtime();
+		std::vector<bwtintv_t> &smems = thr_aux.ans; smems.clear();
 		for (int j = 0; j < read.length(); ) {
+			int last_pivot = j;
 			j = collect_smem_with_sst((const uint8_t*)read.c_str(), read.length(), j, 1, thr_aux);
+			if (batch_id == 2 and i == 603) {
+				fprintf(stderr, "[%d, %d]\n", last_pivot, j);
+				for (const auto &m : thr_aux.mem) {
+					fprintf(stderr, "%s\n", mem_str(m).c_str());
+				}
+			}
 			for (const auto &m : thr_aux.mem) {
 				if ((int)m.info - (m.info >> 32) >= mem_opt->min_seed_len) {
 					smems.push_back(m);
@@ -410,15 +480,50 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			for (int j = 0; j < read.length(); ) {
 				if (read[j] < 4) {
 					bwtintv_t m;
-					j = bwt_seed_strategy1(bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), j, mem_opt->min_seed_len, mem_opt->max_mem_intv, &m);
+//					j = bwt_seed_strategy1(bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), j, mem_opt->min_seed_len, mem_opt->max_mem_intv, &m);
+					j = tem_forward_sst((const uint8_t*) read.c_str(), read.length(), j, mem_opt->min_seed_len, mem_opt->max_mem_intv, &m);
 					if (m.x[2] > 0) smems.push_back(m);
 				} else {
 					j++;
 				}
 			}
 		}
+		cpu_end = cputime(); real_end = realtime();
+		comp_cpu_time += cpu_end - cpu_start;
+		comp_real_time += real_end - real_start;
+
+		cpu_start = cputime(); real_start = realtime();
+		mem_collect_intv(mem_opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), mem_aux);
+		cpu_end = cputime(); real_end = realtime();
+		bwa_cpu_time += cpu_end - cpu_start;
+		bwa_real_time += real_end - real_start;
+
+		std::vector<bwtintv_t> truth_set;
+		for (int j = 0; j < mem_aux->mem.n; j++) {
+			truth_set.push_back(mem_aux->mem.a[j]);
+		}
+		if (smems.size() != truth_set.size()) {
+			fprintf(stderr, "ERR at batch %d read %d\n", batch_id, i);
+			fprintf(stderr, "COMP BWA (%ld)\n", smems.size());
+			for (const auto &p : smems) {
+				fprintf(stderr, "%s\n", mem_str(p).c_str());
+			}
+			fprintf(stderr, "BWA-MEM (%ld)\n", truth_set.size());
+			for (const auto &p : truth_set) {
+				fprintf(stderr, "%s\n", mem_str(p).c_str());
+			}
+		}
+		assert(smems.size() == truth_set.size());
+		std::sort(smems.begin(), smems.end(), mem_cmp);
+		std::sort(truth_set.begin(), truth_set.end(), mem_cmp);
+		for (int j = 0; j < smems.size(); j++) {
+			assert(mem_eq(smems[j], truth_set[j]));
+		}
 	}
-	fprintf(stderr, "Batch %d done\n", ++batch_id);
+	fprintf(stderr, "Batch %d pass BWA(%.3f,%.3f) COMP(%.3f,%.3f) Gain(%.2f,%.2f)\n",
+		 ++batch_id,
+		 bwa_cpu_time, bwa_real_time, comp_cpu_time, comp_real_time,
+		 comp_cpu_time / bwa_cpu_time, comp_real_time / bwa_real_time);
 }
 
 void BWA_seeding::seeding_SE() {
@@ -430,6 +535,8 @@ void BWA_seeding::seeding_SE() {
 	long curr_position = 0, curr_mis_cnt = 0;
 	forward_sst = new SST(bwa_idx->bwt);
 	backward_sst = new SST(bwa_idx->bwt);
+	mem_aux = smem_aux_init();
+
 	for (int i = 0; i < hq_reads_list->reads_count; i++) {
 		curr_position += hq_reads_list->off[i];
 		memcpy(buffer, (hq_pg.data() + curr_position), hq_reads_list->read_length);
@@ -458,6 +565,7 @@ void BWA_seeding::seeding_SE() {
 	}
 	delete forward_sst;
 	delete backward_sst;
+	smem_aux_destroy(mem_aux);
 
 	// Restoring LQ reads
 	curr_position = 0;
@@ -476,57 +584,6 @@ void BWA_seeding::seeding_SE() {
 	delete [] buffer;
 }
 
-mem_opt_t *mem_opt_init() {
-	auto *o = (mem_opt_t*) calloc(1, sizeof(mem_opt_t));
-	o->flag = 0;
-	o->a = 1; o->b = 4;
-	o->o_del = o->o_ins = 6;
-	o->e_del = o->e_ins = 1;
-	o->w = 100;
-	o->T = 30;
-	o->zdrop = 100;
-	o->pen_unpaired = 17;
-	o->pen_clip5 = o->pen_clip3 = 5;
-
-	o->max_mem_intv = 20;
-
-	o->min_seed_len = 19;
-	o->split_width = 10;
-	o->max_occ = 500;
-	o->max_chain_gap = 10000;
-	o->max_ins = 10000;
-	o->mask_level = 0.50;
-	o->drop_ratio = 0.50;
-	o->XA_drop_ratio = 0.80;
-	o->split_factor = 1.5;
-	o->chunk_size = 10000000;
-	o->n_threads = 1;
-	o->max_XA_hits = 5;
-	o->max_XA_hits_alt = 200;
-	o->max_matesw = 50;
-	o->mask_level_redun = 0.95;
-	o->min_chain_weight = 0;
-	o->max_chain_extend = 1<<30;
-	o->mapQ_coef_len = 50; o->mapQ_coef_fac = log(o->mapQ_coef_len);
-	bwa_fill_scmat(o->a, o->b, o->mat);
-	return o;
-}
-
-smem_aux_t *smem_aux_init() {
-	smem_aux_t *a;
-	a = (smem_aux_t*) calloc(1, sizeof(smem_aux_t));
-	a->tmpv[0] = (bwtintv_v*) calloc(1, sizeof(bwtintv_v));
-	a->tmpv[1] = (bwtintv_v*) calloc(1, sizeof(bwtintv_v));
-	return a;
-}
-
-void smem_aux_destroy(smem_aux_t *a) {
-	free(a->tmpv[0]->a); free(a->tmpv[0]);
-	free(a->tmpv[1]->a); free(a->tmpv[1]);
-	free(a->mem.a); free(a->mem1.a);
-	free(a);
-}
-
 void BWA_seeding::compressive_seeding() {
 	// Loading FM-index
 	bwa_idx = bwa_idx_load_from_shm(index_name.c_str());
@@ -542,8 +599,6 @@ void BWA_seeding::compressive_seeding() {
 		fprintf(stderr, "Load the FM-index from shared memory\n");
 	}
 	mem_opt = mem_opt_init();
-	mem_aux = smem_aux_init();
-
 
 	std::ifstream in(archive_name); assert(in.is_open());
 	for (int i = 0; i < strlen(PGRC_HEADER); i++) assert(in.get() == PGRC_HEADER[i]);
