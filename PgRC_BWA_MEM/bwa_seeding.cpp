@@ -194,7 +194,26 @@ int SST::query_child(int parent, uint8_t base, bool is_back) {
 	return p.children[base];
 }
 
+static bool check_mem(const bwt_t *bwt, const std::string &s, const bwtintv_t &ref) {
+	bwtintv_t ik, ok[4];
+	bwt_set_intv(bwt, nst_nt4_table[s[0]], ik);
+	for (int i = 1; i < s.size(); i++) {
+		int c = nst_nt4_table[s[i]];
+		bwt_extend(bwt, &ik, ok, 1);
+		ik = ok[c];
+	}
+	bool correct = ref.x[0] == ik.x[0] and ref.x[1] == ik.x[1] and ref.x[2] == ik.x[2];
+	if (not correct) {
+		fprintf(stderr, "%s:[%ld, %ld, %ld] <-> [%ld, %ld, %ld]\n",
+		  s.c_str(),
+		  ik.x[0], ik.x[1], ik.x[2],
+		  ref.x[0], ref.x[1], ref.x[2]);
+	}
+	return correct;
+}
+
 int SST::add_lep_child(int parent, uint8_t base, const uint64_t *x) {
+	monitor.push_back("ACGT"[base]);
 	auto &p = nodes[parent];
 	if (p.children[base] == -1) {
 		p.children[base] = (int)nodes.size();
@@ -204,20 +223,34 @@ int SST::add_lep_child(int parent, uint8_t base, const uint64_t *x) {
 		child.match.x[2] = x[2];
 		nodes.push_back(child);
 	} else {
-		const auto &c = nodes[p.children[base]];
-		for (int i = 0; i < 3; i++) {
-			assert(c.match.x[i] == x[i]);
+		auto &c = nodes[p.children[base]];
+		if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
+			c.match.x[0] = x[0];
+			c.match.x[1] = x[1];
+			c.match.x[2] = x[2];
+			assert(check_mem(bwt, monitor, c.match));
+		} else {
+			assert(check_mem(bwt, monitor, c.match));
+			for (int i = 0; i < 3; i++) {
+				assert(c.match.x[i] == x[i]);
+			}
 		}
 	}
-	monitor.push_back("ACGT"[base]);
-	const auto &c = nodes[p.children[base]];
-	fprintf(stderr, "add LEP child (%d, %d): %s\t[%ld, %ld, %ld]\n",
-	        parent, p.children[base],
-	        monitor.c_str(), c.match.x[0], c.match.x[1], c.match.x[2]);
 	return p.children[base];
 }
 
+static bool check_mem(const bwt_t *bwt, const uint8_t *seq, int start, int end, const bwtintv_t &ref) {
+	bwtintv_t ik, ok[4];
+	bwt_set_intv(bwt, seq[start], ik);
+	for (int i = start + 1; i < end; i++) {
+		bwt_extend(bwt, &ik, ok, 0);
+		ik = ok[3 - seq[i]];
+	}
+	return ref.x[0] == ik.x[0] and ref.x[1] == ik.x[1] and ref.x[2] == ik.x[2];
+}
+
 int SST::add_empty_child(int parent, uint8_t base) {
+	monitor.push_back("ACGT"[base]);
 	auto &p = nodes[parent];
 	if (p.children[base] == -1) {
 		p.children[base] = (int)nodes.size();
@@ -227,11 +260,6 @@ int SST::add_empty_child(int parent, uint8_t base) {
 		child.match.x[2] = 0;
 		nodes.push_back(child);
 	} // else do nothing whatever the child node is empty or not
-	monitor.push_back("ACGT"[base]);
-	const auto &c = nodes[p.children[base]];
-	fprintf(stderr, "add empty child (%d, %d): %s\t[%ld, %ld, %ld]\n",
-		 parent, p.children[base],
-		 monitor.c_str(), c.match.x[0], c.match.x[1], c.match.x[2]);
 	return p.children[base];
 }
 
@@ -253,10 +281,10 @@ static void dfs_print_tree(SST *tree, int node, std::string &prefix) {
 int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux_t &aux) {
 	if (seq[pivot] > 3) return pivot + 1;
 	bwtintv_t ik, next[4];
-	ik = forward_sst->get_intv(forward_sst->get_child(0, seq[pivot]));
+	int node_id = forward_sst->query_child(0, seq[pivot], true);
+	ik = forward_sst->get_intv(node_id);
 	ik.info = pivot + 1;
-	int node_id = 0; // Root
-	aux.lep.clear();
+	aux.prev_intv.clear();
 	int ret_pivot = len;
 	for (int i = pivot + 1; i < len; i++) {
 		if (seq[i] < 4) {
@@ -264,7 +292,7 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 			node_id = forward_sst->query_child(node_id, c, false);
 			next[c] = forward_sst->get_intv(node_id);
 			if (next[c].x[2] != ik.x[2]) {
-				aux.lep.push_back(ik);
+				aux.prev_intv.push_back(ik);
 				if (next[c].x[2] < min_hits) {
 					ret_pivot = i;
 					break;
@@ -273,58 +301,82 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 			ik = next[c];
 			ik.info = i + 1;
 		} else {
-			aux.lep.push_back(ik);
+			aux.prev_intv.push_back(ik);
 			ret_pivot = i + 1;
 			break;
 		}
 	}
-	if (ret_pivot == len) aux.lep.push_back(ik);
-	std::reverse(aux.lep.begin(), aux.lep.end());
+	if (ret_pivot == len) aux.prev_intv.push_back(ik);
+	std::reverse(aux.prev_intv.begin(), aux.prev_intv.end());
+	for (const auto &m : aux.prev_intv) {
+		assert(check_mem(bwa_idx->bwt, seq, pivot, m.info, m));
+	}
 
 	// Collect node indexes for LEPs in backward SST
-	for (const auto &p : aux.lep) {
-		fprintf(stderr, "%d SA:[%ld, %ld, %ld]\n", (int)p.info, p.x[0], p.x[1], p.x[2]);
-		backward_sst->monitor.clear();
+//	for (int i = 0; i < len; i++) fprintf(stderr, "%c", "ACGTN"[seq[i]]); fprintf(stderr, "\n");
+	aux.prev_node.clear();
+	for (const auto &p : aux.prev_intv) {
+		int start = pivot, end = (int)p.info;
+//		fprintf(stderr, "LEP [%d, %d] [%ld, %ld, %ld]\n", start, end, p.x[0], p.x[1], p.x[2]);
+//		for (int i = start; i < end; i++) fprintf(stderr, "%c", "ACGT"[seq[i]]); fprintf(stderr, "\n");
+
 		node_id = 0;
+		backward_sst->monitor.clear();
 		for (int i = (int)p.info - 1; i >= pivot + 1; i--) {
 			node_id = backward_sst->add_empty_child(node_id, seq[i]);
 		}
-		backward_sst->add_lep_child(node_id, seq[pivot], p.x);
+		node_id = backward_sst->add_lep_child(node_id, seq[pivot], p.x);
+		aux.prev_node.push_back(node_id);
 	}
 
-	std::string prefix;
-	dfs_print_tree(backward_sst, 0, prefix);
-	exit(EXIT_SUCCESS);
+	aux.mem.clear();
+	for (int i = pivot - 1; i >= -1; i--) {
+		int c = (i == -1) ?4 :seq[i];
+		aux.curr_intv.clear(); aux.curr_node.clear();
+		for (int j = 0; j < aux.prev_node.size(); j++) {
+			node_id = aux.prev_node[j];
+			ik = aux.prev_intv[j];
+			if (c < 4) {
+				node_id = backward_sst->query_child(node_id, c, true);
+				next[c] = backward_sst->get_intv(node_id);
+			}
+			if (c > 3 or next[c].x[2] < min_hits) {
+				if (not aux.curr_intv.empty()) {
+					fprintf(stderr, "Left extend from [%d, %d] [%ld, %ld, %ld] to [%d, %d] [%ld, %ld, %ld]\n",
+						 i + 1, (int) ik.info, ik.x[0], ik.x[1], ik.x[2],
+						 i, (int) ik.info, next[c].x[0], next[c].x[1], next[c].x[2]);
+					for (const auto &a : aux.curr_intv) {
+						fprintf(stderr, "[%d, %d] [%ld, %ld, %ld]\n", i, (int)a.info, a.x[0], a.x[1], a.x[2]);
+					}
+				}
+				assert(aux.curr_intv.empty() and aux.curr_node.empty());
+				if (aux.mem.empty() or i + 1 < aux.mem.back().info >> 32) {
+					ik.info |= (1UL * (i + 1) << 32);
+					aux.mem.push_back(ik);
+				}
+			} else {
+				if (aux.curr_intv.empty() or next[c].x[2] != aux.curr_intv.back().x[2]) {
+					next[c].info = ik.info;
+					aux.curr_intv.push_back(next[c]);
+					aux.curr_node.push_back(node_id);
+				}
+			}
+		}
+		if (aux.curr_intv.empty()) break;
+		std::swap(aux.prev_intv, aux.curr_intv);
+		std::swap(aux.prev_node, aux.curr_node);
+	}
 
-
-//	aux.ans.clear();
-//	for (int i = pivot - 1; i >= -1; i--) {
-//		int c = (i == -1) ?4 :seq[i];
-//		curr.clear();
-//		for (auto &p : prev) {
-//			if (c < 4) bwt_extend(bwa_idx->bwt, &p, next, 1);
-//			if (c > 3 or next[c].x[2] < min_hits) {
-//				assert(curr.empty());
-//				if (ans.empty() or i + 1 < ans.back().info >> 32) {
-//					p.info |= (1UL * (i + 1) << 32);
-//					ans.push_back(p);
-//				}
-//			} else {
-//				if (curr.empty() or next[c].x[2] != curr.back().x[2]) {
-//					next[c].info = p.info;
-//					curr.push_back(next[c]);
-//				}
-//			}
-//		}
-//		if (curr.empty()) break;
-//		std::swap(prev, curr);
-//	}
+	for (const auto &p : aux.mem) {
+		int start = (int)(p.info >> 32), end = (int)p.info;
+//		fprintf(stderr, "[%d, %d) [%ld, %ld, %ld]\n", start, end, p.x[0], p.x[1], p.x[2]);
+		assert(check_mem(bwa_idx->bwt, seq, start, end, p));
+	}
 	return ret_pivot;
 }
 
 void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch) {
-	forward_sst->clear();
-	backward_sst->clear();
+	forward_sst->clear(); backward_sst->clear();
 	for (int i = 0; i < batch.size(); i++) {
 		auto &read = batch[i];
 		for (int j = 0; j < read.length(); j++) {
@@ -332,9 +384,8 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		}
 		std::vector<bwtintv_t> smems;
 		for (int j = 0; j < read.length(); ) {
-			std::vector<bwtintv_t> mems;
 			j = collect_smem_with_sst((const uint8_t*)read.c_str(), read.length(), j, 1, thr_aux);
-			for (const auto &m : mems) {
+			for (const auto &m : thr_aux.mem) {
 				if ((int)m.info - (m.info >> 32) >= mem_opt->min_seed_len) {
 					smems.push_back(m);
 				}
@@ -347,9 +398,8 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			int start = m.info >> 32, end = (int)m.info;
 			if (end - start < (int)(mem_opt->min_seed_len * mem_opt->split_factor + .499)
 				or m.x[2] > mem_opt->split_width) continue;
-			std::vector<bwtintv_t> mems;
-//			collect_smem_with_lep((const uint8_t*)read.c_str(), read.length(), offset[i], (end + start) / 2, m.x[2] + 1, mems);
-			for (const auto &rem : mems) {
+			collect_smem_with_sst((const uint8_t*)read.c_str(), read.length(), (end + start) / 2, m.x[2] + 1, thr_aux);
+			for (const auto &rem : thr_aux.mem) {
 				if ((int)rem.info - (rem.info >> 32) >= mem_opt->min_seed_len) {
 					smems.push_back(rem);
 				}
@@ -368,6 +418,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			}
 		}
 	}
+	fprintf(stderr, "Batch %d done\n", ++batch_id);
 }
 
 void BWA_seeding::seeding_SE() {
@@ -400,6 +451,7 @@ void BWA_seeding::seeding_SE() {
 		offset.push_back(curr_position);
 		if (read_batch.size() >= COMP_BATCH_SIZE or i == hq_reads_list->reads_count - 1) {
 			test_a_batch(offset, read_batch);
+//			exit(EXIT_SUCCESS);
 			read_batch.clear();
 			offset.clear();
 		}

@@ -90,12 +90,19 @@ public:
 	inline int get_child(int parent, uint8_t base) { return nodes[parent].children[base]; }
 
 	/** Only keep root and its four children */
-	void clear() { nodes.resize(5); }
+	void clear() {
+		nodes.resize(5);
+		for (int i = 1; i <= 4; i++) {
+			for (int j = 0; j < 4; j++) {
+				nodes[i].children[j] = -1;
+			}
+		}
+	}
 };
 
 struct thread_aux_t {
-	std::vector<int> prev, curr; // Buffer for SST node indexes
-	std::vector<bwtintv_t> lep; // Left extension points
+	std::vector<bwtintv_t> prev_intv, curr_intv; // Buffer for forward search LEP and backward extension
+	std::vector<int> prev_node, curr_node; // Buffer for SST node indexes
 	std::vector<bwtintv_t> mem; // Storing all SMEMs
 	std::vector<bwtintv_t> ans; // Storing all SMEMs with length >= minimal seed length
 };
