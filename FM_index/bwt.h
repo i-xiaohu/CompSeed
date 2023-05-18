@@ -61,7 +61,6 @@ typedef struct {
 
 typedef struct {
 	bwtint_t x[3], info;
-	uint8_t type;
 } bwtintv_t;
 
 typedef struct { size_t n, m; bwtintv_t *a; } bwtintv_v;
