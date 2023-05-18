@@ -68,21 +68,21 @@ struct SST_Node_t {
 class SST {
 private:
 	std::vector<SST_Node_t> nodes;
-	bwt_t *bwt;
+	const bwt_t *bwt;
 	bwtintv_t next[4];
 
 public:
-	std::string monitor;
-	explicit SST(bwt_t *b);
+	explicit SST(const bwt_t *b);
 
 	/** At parent node with prefix p, query child node for p + base.
 	 * If the child node does not exist, query it from FMD-index. */
 	int query_child(int parent, uint8_t base, bool is_back);
 
-	/** Add [pivot, LEP] to backward SST. But SA interval of suffixes is unknown.
-	 * Use {0,0,0} to mark such nodes in SST. */
+	/** Add [pivot, LEP] to backward SST. */
 	int add_lep_child(int parent, uint8_t base, const uint64_t *x);
 
+	/** Add suffixes of [pivot + 1, LEP] to backward SST. But SA interval of
+	 * suffixes is unknown so {0,0,0} is used to mark such nodes in SST. */
 	int add_empty_child(int parent, uint8_t base);
 
 	inline bwtintv_t get_intv(int id) { return nodes[id].match; }
@@ -90,11 +90,11 @@ public:
 	inline int get_child(int parent, uint8_t base) { return nodes[parent].children[base]; }
 
 	/** Only keep root and its four children */
-	void clear() {
+	inline void clear() {
 		nodes.resize(5);
 		for (int i = 1; i <= 4; i++) {
-			for (int j = 0; j < 4; j++) {
-				nodes[i].children[j] = -1;
+			for (int &c : nodes[i].children) {
+				c = -1;
 			}
 		}
 	}
@@ -110,6 +110,13 @@ struct thread_aux_t {
 struct time_rec_t {
 	double seeding, reseed, third, sal, total;
 	time_rec_t():seeding(0), reseed(0), third(0), sal(0), total(0) {}
+};
+
+struct Reseed_Item {
+	int read_id, pivot;
+	long min_hits;
+	Reseed_Item(int r, int p, long m): read_id(r), pivot(p), min_hits(m) {}
+	bool operator < (const Reseed_Item &item) const { return pivot > item.pivot; }
 };
 
 class BWA_seeding {
@@ -154,12 +161,15 @@ private:
 	smem_aux_t *mem_aux = nullptr;
 	thread_aux_t thr_aux;
 
-	int COMP_BATCH_SIZE = 1024; // Process 1024 sorted reads at a time
+	const int COMP_BATCH_SIZE = 1024; // Process 1024 sorted reads at a time
 	int batch_id = 0;
-	int read_with_n = 0;
+	int full_read_match = 0; // How many reads are exactly matched in full length
 
 	SST *forward_sst = nullptr;
 	SST *backward_sst = nullptr;
+	std::vector<Reseed_Item> reseed_items;
+	std::vector<bwtintv_t> batch_mem[1024];
+	std::vector<bwtintv_t> truth_mem[1024];
 
 	time_rec_t comp_cpu, comp_real;
 	time_rec_t bwa_cpu, bwa_real;
