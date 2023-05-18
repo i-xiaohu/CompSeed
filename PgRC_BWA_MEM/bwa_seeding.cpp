@@ -165,12 +165,14 @@ void smem_aux_destroy(smem_aux_t *a) {
 	free(a);
 }
 
-void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a) {
+void BWA_seeding::mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a) {
 	int i, k, x = 0, old_n;
 	int start_width = 1;
 	int split_len = (int)(opt->min_seed_len * opt->split_factor + .499);
 	a->mem.n = 0;
 	// first pass: find all SMEMs
+	double t_start, t_real;
+	t_start = cputime(); t_real = realtime();
 	while (x < len) {
 		if (seq[x] < 4) {
 			x = bwt_smem1(bwt, len, seq, x, start_width, &a->mem1, a->tmpv);
@@ -182,7 +184,10 @@ void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uin
 			}
 		} else ++x;
 	}
+	bwa_cpu.seeding += cputime() - t_start; bwa_real.seeding += realtime() - t_real;
+
 	// second pass: find MEMs inside a long SMEM
+	t_start = cputime(); t_real = realtime();
 	old_n = a->mem.n;
 	for (k = 0; k < old_n; ++k) {
 		bwtintv_t *p = &a->mem.a[k];
@@ -194,7 +199,10 @@ void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uin
 				kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
 			}
 	}
+	bwa_cpu.reseed += cputime() - t_start; bwa_real.reseed += realtime() - t_real;
+
 	// third pass: LAST-like
+	t_start = cputime(); t_real = realtime();
 	if (opt->max_mem_intv > 0) {
 		x = 0;
 		while (x < len) {
@@ -211,6 +219,7 @@ void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uin
 			} else ++x;
 		}
 	}
+	bwa_cpu.third += cputime() - t_start; bwa_real.third += realtime() - t_real;
 }
 
 SST::SST(bwt_t *b) {
@@ -356,6 +365,10 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 		}
 	}
 	if (ret_pivot == len) aux.prev_intv.push_back(ik);
+	if (pivot == 0) { // Special judge
+		aux.mem.push_back(aux.prev_intv.back());
+		return ret_pivot;
+	}
 	std::reverse(aux.prev_intv.begin(), aux.prev_intv.end());
 
 	// Collect node indexes for LEPs in backward SST
@@ -443,25 +456,23 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		for (int j = 0; j < read.length(); j++) {
 			read[j] = nst_nt4_table[(int) read[j]];
 		}
-		double cpu_start, cpu_end, real_start, real_end;
-		cpu_start = cputime(); real_start = realtime();
+
+		double cpu_stamp, real_stamp, global_cpu, global_real;
+		global_cpu = cpu_stamp = cputime();
+		global_real = real_stamp = realtime();
 		std::vector<bwtintv_t> &smems = thr_aux.ans; smems.clear();
 		for (int j = 0; j < read.length(); ) {
 			int last_pivot = j;
 			j = collect_smem_with_sst((const uint8_t*)read.c_str(), read.length(), j, 1, thr_aux);
-			if (batch_id == 2 and i == 603) {
-				fprintf(stderr, "[%d, %d]\n", last_pivot, j);
-				for (const auto &m : thr_aux.mem) {
-					fprintf(stderr, "%s\n", mem_str(m).c_str());
-				}
-			}
 			for (const auto &m : thr_aux.mem) {
 				if ((int)m.info - (m.info >> 32) >= mem_opt->min_seed_len) {
 					smems.push_back(m);
 				}
 			}
 		}
+		comp_cpu.seeding += cputime() - cpu_stamp; comp_real.seeding += realtime() - real_stamp;
 
+		cpu_stamp = cputime(); real_stamp = realtime();
 		int old_n = (int)smems.size();
 		for (int j = 0; j < old_n; j++) {
 			const auto &m = smems[j] ;
@@ -475,12 +486,13 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 				}
 			}
 		}
+		comp_cpu.reseed += cputime() - cpu_stamp; comp_real.reseed += realtime() - real_stamp;
 
+		cpu_stamp = cputime(); real_stamp = realtime();
 		if (mem_opt->max_mem_intv > 0) {
 			for (int j = 0; j < read.length(); ) {
 				if (read[j] < 4) {
 					bwtintv_t m;
-//					j = bwt_seed_strategy1(bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), j, mem_opt->min_seed_len, mem_opt->max_mem_intv, &m);
 					j = tem_forward_sst((const uint8_t*) read.c_str(), read.length(), j, mem_opt->min_seed_len, mem_opt->max_mem_intv, &m);
 					if (m.x[2] > 0) smems.push_back(m);
 				} else {
@@ -488,15 +500,13 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 				}
 			}
 		}
-		cpu_end = cputime(); real_end = realtime();
-		comp_cpu_time += cpu_end - cpu_start;
-		comp_real_time += real_end - real_start;
+		comp_cpu.third += cputime() - cpu_stamp; comp_real.third += realtime() - real_stamp;
+		comp_cpu.total += cputime() - global_cpu; comp_real.total += realtime() - global_real;
 
-		cpu_start = cputime(); real_start = realtime();
+
+		cpu_stamp = cputime(); real_stamp = realtime();
 		mem_collect_intv(mem_opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), mem_aux);
-		cpu_end = cputime(); real_end = realtime();
-		bwa_cpu_time += cpu_end - cpu_start;
-		bwa_real_time += real_end - real_start;
+		bwa_cpu.total += cputime() - cpu_stamp; bwa_real.total += realtime() - real_stamp;
 
 		std::vector<bwtintv_t> truth_set;
 		for (int j = 0; j < mem_aux->mem.n; j++) {
@@ -520,10 +530,19 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			assert(mem_eq(smems[j], truth_set[j]));
 		}
 	}
+
 	fprintf(stderr, "Batch %d pass BWA(%.3f,%.3f) COMP(%.3f,%.3f) Gain(%.2f,%.2f)\n",
 		 ++batch_id,
-		 bwa_cpu_time, bwa_real_time, comp_cpu_time, comp_real_time,
-		 comp_cpu_time / bwa_cpu_time, comp_real_time / bwa_real_time);
+		 bwa_cpu.total, bwa_real.total, comp_cpu.total, comp_real.total,
+		 comp_cpu.total / bwa_cpu.total, comp_real.total / bwa_real.total);
+	fprintf(stderr, "BWA-MEM: Seeding %.2f, Reseed %.2f, Third %.2f\n",
+		 100 * bwa_cpu.seeding / bwa_cpu.total,
+		 100 * bwa_cpu.reseed / bwa_cpu.total,
+		 100 * bwa_cpu.third / bwa_cpu.total);
+	fprintf(stderr, "COMP:    Seeding %.2f, Reseed %.2f, Third %.2f\n",
+		 100 * comp_cpu.seeding / comp_cpu.total,
+		 100 * comp_cpu.reseed / comp_cpu.total,
+		 100 * comp_cpu.third / comp_cpu.total);
 }
 
 void BWA_seeding::seeding_SE() {
@@ -566,6 +585,11 @@ void BWA_seeding::seeding_SE() {
 	delete forward_sst;
 	delete backward_sst;
 	smem_aux_destroy(mem_aux);
+	fprintf(stderr, "Overall BWA\tCOMP\tGAIN\n");
+	fprintf(stderr, "  Total %.2f\t%.2f\t%.2f\n", bwa_cpu.total, comp_cpu.total, comp_cpu.total / bwa_cpu.total);
+	fprintf(stderr, "  S1    %.2f\t%.2f\t%.2f\n", bwa_cpu.seeding, comp_cpu.seeding, comp_cpu.seeding / bwa_cpu.seeding);
+	fprintf(stderr, "  S2    %.2f\t%.2f\t%.2f\n", bwa_cpu.reseed, comp_cpu.reseed, comp_cpu.reseed / bwa_cpu.reseed);
+	fprintf(stderr, "  S3    %.2f\t%.2f\t%.2f\n", bwa_cpu.third, comp_cpu.third, comp_cpu.third / bwa_cpu.third);
 
 	// Restoring LQ reads
 	curr_position = 0;

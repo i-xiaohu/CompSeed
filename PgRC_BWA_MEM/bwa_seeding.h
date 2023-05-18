@@ -107,6 +107,11 @@ struct thread_aux_t {
 	std::vector<bwtintv_t> ans; // Storing all SMEMs with length >= minimal seed length
 };
 
+struct time_rec_t {
+	double seeding, reseed, third, sal, total;
+	time_rec_t():seeding(0), reseed(0), third(0), sal(0), total(0) {}
+};
+
 class BWA_seeding {
 private:
 	std::string archive_name;
@@ -156,8 +161,8 @@ private:
 	SST *forward_sst = nullptr;
 	SST *backward_sst = nullptr;
 
-	double comp_cpu_time = 0, comp_real_time = 0;
-	double bwa_cpu_time = 0, bwa_real_time = 0;
+	time_rec_t comp_cpu, comp_real;
+	time_rec_t bwa_cpu, bwa_real;
 
 public:
 	void set_archive_name(const char *fn) { this->archive_name = fn; }
@@ -170,6 +175,8 @@ public:
 	void compressive_seeding();
 
 	void set_index_name(const char *fn) { this->index_name = fn; }
+
+	void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a);
 
 	int collect_smem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux_t &aux);
 
