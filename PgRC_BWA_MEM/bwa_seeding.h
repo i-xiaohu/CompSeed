@@ -195,6 +195,8 @@ public:
 	void test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch);
 
 	void seeding_SE();
+
+	void on_dec_reads(const char *fn);
 };
 
 #endif //PGRC_LEARN_BWA_SEEDING_H

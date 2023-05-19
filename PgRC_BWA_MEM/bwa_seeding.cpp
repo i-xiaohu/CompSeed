@@ -236,23 +236,22 @@ SST::SST(const bwt_t *b) {
 }
 
 int SST::query_child(int parent, uint8_t base, bool is_back) {
-	auto &p = nodes[parent];
-	if (p.children[base] == -1) {
-		bwt_extend(bwt, &p.match, next, is_back);
+	if (nodes[parent].children[base] == -1) {
+		bwt_extend(bwt, &nodes[parent].match, next, is_back);
 		for (uint8_t c = 0; c < 4; c++) {
 			SST_Node_t child;
 			child.match = next[c];
-			p.children[c] = (int)nodes.size();
+			nodes[parent].children[c] = (int)nodes.size();
 			nodes.push_back(child);
 		}
 	}
-	auto &c = nodes[p.children[base]];
+	auto &c = nodes[nodes[parent].children[base]];
 	// If find an empty node, BWT query is required
 	if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
-		bwt_extend(bwt, &p.match, next, is_back);
+		bwt_extend(bwt, &nodes[parent].match, next, is_back);
 		c.match = next[base];
 	}
-	return p.children[base];
+	return nodes[parent].children[base];
 }
 
 static bool check_mem(const bwt_t *bwt, const std::string &s, const bwtintv_t &ref) {
@@ -274,23 +273,22 @@ static bool check_mem(const bwt_t *bwt, const std::string &s, const bwtintv_t &r
 }
 
 int SST::add_lep_child(int parent, uint8_t base, const uint64_t *x) {
-	auto &p = nodes[parent];
-	if (p.children[base] == -1) {
-		p.children[base] = (int)nodes.size();
+	if (nodes[parent].children[base] == -1) {
+		nodes[parent].children[base] = (int)nodes.size();
 		SST_Node_t child;
 		child.match.x[0] = x[0];
 		child.match.x[1] = x[1];
 		child.match.x[2] = x[2];
 		nodes.push_back(child);
 	} else {
-		auto &c = nodes[p.children[base]];
+		auto &c = nodes[nodes[parent].children[base]];
 		if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
 			c.match.x[0] = x[0];
 			c.match.x[1] = x[1];
 			c.match.x[2] = x[2];
 		}
 	}
-	return p.children[base];
+	return nodes[parent].children[base];
 }
 
 static bool check_mem(const bwt_t *bwt, const uint8_t *seq, int start, int end, const bwtintv_t &ref) {
@@ -305,15 +303,15 @@ static bool check_mem(const bwt_t *bwt, const uint8_t *seq, int start, int end, 
 
 int SST::add_empty_child(int parent, uint8_t base) {
 	auto &p = nodes[parent];
-	if (p.children[base] == -1) {
-		p.children[base] = (int)nodes.size();
+	if (nodes[parent].children[base] == -1) {
+		nodes[parent].children[base] = (int)nodes.size();
 		SST_Node_t child;
 		child.match.x[0] = 0;
 		child.match.x[1] = 0;
 		child.match.x[2] = 0;
 		nodes.push_back(child);
 	} // else do nothing whatever the child node is empty or not
-	return p.children[base];
+	return nodes[parent].children[base];
 }
 
 static void dfs_print_tree(SST *tree, int node, std::string &prefix) {
@@ -464,12 +462,16 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		for (int j = 0; j < read.length(); j++) {
 			read[j] = nst_nt4_table[(int) read[j]];
 		}
+//		fprintf(stderr, "Batch %d Read %d\n", batch_id + 1, i);
+//		for (int j = 0; j < read.length(); j++) {
+//			fprintf(stderr, "%c", "ACGTN"[read[j]]);
+//		}
+//		fprintf(stderr, "\n");
 
 		double cpu_stamp, real_stamp, global_cpu, global_real;
 		global_cpu = cpu_stamp = cputime(); global_real = real_stamp = realtime();
 		std::vector<bwtintv_t> &smems = batch_mem[i]; smems.clear();
 		for (int j = 0; j < read.length(); ) {
-			int last_pivot = j;
 			j = collect_smem_with_sst((const uint8_t*)read.c_str(), read.length(), j, 1, thr_aux);
 			for (const auto &m : thr_aux.mem) {
 				if ((int)m.info - (m.info >> 32) >= mem_opt->min_seed_len) {
@@ -502,6 +504,11 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		comp_cpu.third += cputime() - cpu_stamp; comp_real.third += realtime() - real_stamp;
 		comp_cpu.total += cputime() - global_cpu; comp_real.total += realtime() - global_real;
 
+//		fprintf(stderr, "SMEMs %ld\n", smems.size());
+//		for (const auto &p : smems) {
+//			fprintf(stderr, "%s\n", mem_str(p).c_str());
+//		}
+
 		cpu_stamp = cputime(); real_stamp = realtime();
 		mem_collect_intv(mem_opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), mem_aux);
 		bwa_cpu.total += cputime() - cpu_stamp; bwa_real.total += realtime() - real_stamp;
@@ -515,6 +522,11 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			perfect_match |= (mem_len(m) == read_length) ;
 		}
 		full_read_match += perfect_match;
+
+//		fprintf(stderr, "SMEMs %ld\n", truth_set.size());
+//		for (const auto &p : truth_set) {
+//			fprintf(stderr, "%s\n", mem_str(p).c_str());
+//		}
 	}
 
 	double cpu_stamp = cputime(); double real_stamp = realtime();
@@ -532,6 +544,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		}
 	}
 	comp_cpu.reseed += cputime() - cpu_stamp; comp_real.reseed += realtime() - real_stamp;
+	comp_cpu.total += cputime() - cpu_stamp; comp_real.total += realtime() - real_stamp;
 
 	// Verify correctness
 	for (int i = 0; i < batch.size(); i++) {
@@ -582,6 +595,9 @@ void BWA_seeding::seeding_SE() {
 			buffer[mis_pos] = code_to_mismatch(buffer[mis_pos], mis_code);
 			curr_mis_cnt++;
 		}
+		// Output strand-corrected reads and shifted distance between consecutive reads
+//		fprintf(stdout, "%s\t%d\n", buffer, hq_reads_list->off[i]);
+
 
 		// Reverse-complement it temporarily
 		if (hq_reads_list->rev_comp[i]) {
@@ -590,11 +606,11 @@ void BWA_seeding::seeding_SE() {
 		read_batch.emplace_back(std::string(buffer));
 		offset.push_back(curr_position);
 		if (read_batch.size() >= COMP_BATCH_SIZE or i == hq_reads_list->reads_count - 1) {
-			test_a_batch(offset, read_batch);
-//			exit(EXIT_SUCCESS);
+//			test_a_batch(offset, read_batch);
 			read_batch.clear();
 			offset.clear();
 		}
+//		if (batch_id > 3000) break;
 	}
 	delete forward_sst;
 	delete backward_sst;
@@ -682,6 +698,62 @@ void BWA_seeding::compressive_seeding() {
 	in.close();
 }
 
+void BWA_seeding::on_dec_reads(const char *fn) {
+	// Loading FM-index
+	bwa_idx = bwa_idx_load_from_shm(index_name.c_str());
+	if (bwa_idx == nullptr) {
+		bwa_idx = bwa_idx_load(index_name.c_str(), BWA_IDX_ALL);
+		if (bwa_idx == nullptr) {
+			fprintf(stderr, "Load the FM-index failed\n");
+			exit(EXIT_FAILURE);
+		} else {
+			fprintf(stderr, "Load the FM-index from disk\n");
+		}
+	} else {
+		fprintf(stderr, "Load the FM-index from shared memory\n");
+	}
+	mem_opt = mem_opt_init();
+
+	fprintf(stderr, "Input test data with strand-corrected reads and overlapping information\n");
+	std::ifstream in(fn); assert(in.is_open());
+	std::vector<std::string> read_batch;
+	std::vector<long> offset;
+	char *buffer = new char[1024]; memset(buffer, 0, 1024 * sizeof(char));
+	long off, curr_position = 0, curr_mis_cnt = 0;
+	forward_sst = new SST(bwa_idx->bwt);
+	backward_sst = new SST(bwa_idx->bwt);
+	mem_aux = smem_aux_init();
+	while (in >> buffer >> off) {
+		curr_position += off;
+		read_batch.emplace_back(std::string(buffer));
+		offset.push_back(curr_position);
+		read_length = (int)strlen(buffer);
+		hq_reads_count++;
+		total_reads_count++;
+		if (read_batch.size() >= COMP_BATCH_SIZE or in.eof()) {
+			test_a_batch(offset, read_batch);
+			read_batch.clear();
+			offset.clear();
+		}
+		if (batch_id > 3000) break;
+	}
+
+	fprintf(stderr, "Input %d reads in total\n", total_reads_count);
+	fprintf(stderr, "Overall BWA\tCOMP\tGAIN\n");
+	fprintf(stderr, "  Total %.2f\t%.2f\t%.2f\n", bwa_cpu.total, comp_cpu.total, comp_cpu.total / bwa_cpu.total);
+	fprintf(stderr, "  S1    %.2f\t%.2f\t%.2f\n", bwa_cpu.seeding, comp_cpu.seeding, comp_cpu.seeding / bwa_cpu.seeding);
+	fprintf(stderr, "  S2    %.2f\t%.2f\t%.2f\n", bwa_cpu.reseed, comp_cpu.reseed, comp_cpu.reseed / bwa_cpu.reseed);
+	fprintf(stderr, "  S3    %.2f\t%.2f\t%.2f\n", bwa_cpu.third, comp_cpu.third, comp_cpu.third / bwa_cpu.third);
+	fprintf(stderr, "Perfect Matched Reads: %d (%.2f %%)\n", full_read_match, 100.0 * full_read_match / hq_reads_count);
+
+	free(mem_opt);
+	in.close();
+	delete [] buffer;
+	delete forward_sst;
+	delete backward_sst;
+	smem_aux_destroy(mem_aux);
+}
+
 int main(int argc, char *argv[]) {
 	if (argc == 1) {
 		fprintf(stderr, "Usage: PBM <bwa_index> <pgrc_archieve>\n");
@@ -689,6 +761,10 @@ int main(int argc, char *argv[]) {
 	}
 	BWA_seeding worker;
 	worker.set_index_name(argv[1]);
-	worker.set_archive_name(argv[2]);
-	worker.compressive_seeding();
+	if (std::string(argv[2]) == "test") {
+		worker.on_dec_reads(argv[3]);
+	} else {
+		worker.set_archive_name(argv[2]);
+		worker.compressive_seeding();
+	}
 }
