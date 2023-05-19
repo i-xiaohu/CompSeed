@@ -456,17 +456,11 @@ static std::string mem_str(const bwtintv_t &a) {
 
 void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch) {
 	forward_sst->clear(); backward_sst->clear();
-	reseed_items.clear();
 	for (int i = batch.size() - 1; i >= 0; i--) {
 		auto &read = batch[i];
 		for (int j = 0; j < read.length(); j++) {
 			read[j] = nst_nt4_table[(int) read[j]];
 		}
-//		fprintf(stderr, "Batch %d Read %d\n", batch_id + 1, i);
-//		for (int j = 0; j < read.length(); j++) {
-//			fprintf(stderr, "%c", "ACGTN"[read[j]]);
-//		}
-//		fprintf(stderr, "\n");
 
 		double cpu_stamp, real_stamp, global_cpu, global_real;
 		global_cpu = cpu_stamp = cputime(); global_real = real_stamp = realtime();
@@ -479,15 +473,23 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 				}
 			}
 		}
+		comp_cpu.seeding += cputime() - cpu_stamp; comp_real.seeding += realtime() - real_stamp;
+
+		cpu_stamp = cputime(); real_stamp = realtime();
 		int old_n = (int)smems.size();
 		for (int j = 0; j < old_n; j++) {
-			const auto &m = smems[j] ;
-			int start = m.info >> 32, end = (int)m.info;
+			const auto &p = smems[j] ;
+			int start = p.info >> 32, end = (int)p.info;
 			if (end - start < (int)(mem_opt->min_seed_len * mem_opt->split_factor + .499)
-			    or m.x[2] > mem_opt->split_width) continue;
-			reseed_items.emplace_back(Reseed_Item(i, offset[i] + (start + end) / 2, m.x[2] + 1));
+			    or p.x[2] > mem_opt->split_width) continue;
+			collect_smem_with_sst((const uint8_t*) read.c_str(), read.length(), (start + end) / 2, p.x[2] + 1, thr_aux);
+			for (const auto &m : thr_aux.mem) {
+				if ((int)m.info - (m.info >> 32) >= mem_opt->min_seed_len) {
+					smems.push_back(m);
+				}
+			}
 		}
-		comp_cpu.seeding += cputime() - cpu_stamp; comp_real.seeding += realtime() - real_stamp;
+		comp_cpu.reseed += cputime() - cpu_stamp; comp_real.reseed += realtime() - real_stamp;
 
 		cpu_stamp = cputime(); real_stamp = realtime();
 		if (mem_opt->max_mem_intv > 0) {
@@ -522,29 +524,8 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			perfect_match |= (mem_len(m) == read_length) ;
 		}
 		full_read_match += perfect_match;
-
-//		fprintf(stderr, "SMEMs %ld\n", truth_set.size());
-//		for (const auto &p : truth_set) {
-//			fprintf(stderr, "%s\n", mem_str(p).c_str());
-//		}
 	}
 
-	double cpu_stamp = cputime(); double real_stamp = realtime();
-	std::sort(reseed_items.begin(), reseed_items.end());
-	for (const auto &item : reseed_items) {
-		int i = item.read_id;
-		const auto &read = batch[i];
-		int pivot = item.pivot - offset[i];
-		collect_smem_with_sst((const uint8_t*) read.c_str(), read.length(), pivot, item.min_hits, thr_aux);
-		std::vector<bwtintv_t> &smems = batch_mem[i];
-		for (const auto &m : thr_aux.mem) {
-			if ((int)m.info - (m.info >> 32) >= mem_opt->min_seed_len) {
-				smems.push_back(m);
-			}
-		}
-	}
-	comp_cpu.reseed += cputime() - cpu_stamp; comp_real.reseed += realtime() - real_stamp;
-	comp_cpu.total += cputime() - cpu_stamp; comp_real.total += realtime() - real_stamp;
 
 	// Verify correctness
 	for (int i = 0; i < batch.size(); i++) {
