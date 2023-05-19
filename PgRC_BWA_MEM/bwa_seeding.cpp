@@ -505,13 +505,11 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		}
 		comp_cpu.third += cputime() - cpu_stamp; comp_real.third += realtime() - real_stamp;
 		comp_cpu.total += cputime() - global_cpu; comp_real.total += realtime() - global_real;
+	}
 
-//		fprintf(stderr, "SMEMs %ld\n", smems.size());
-//		for (const auto &p : smems) {
-//			fprintf(stderr, "%s\n", mem_str(p).c_str());
-//		}
-
-		cpu_stamp = cputime(); real_stamp = realtime();
+	for (int i = 0; i < batch.size(); i++) {
+		const auto &read = batch[i];
+		double cpu_stamp = cputime(); double real_stamp = realtime();
 		mem_collect_intv(mem_opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), mem_aux);
 		bwa_cpu.total += cputime() - cpu_stamp; bwa_real.total += realtime() - real_stamp;
 
@@ -519,13 +517,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		for (int j = 0; j < mem_aux->mem.n; j++) {
 			truth_set.push_back(mem_aux->mem.a[j]);
 		}
-		bool perfect_match = false;
-		for (auto &m : smems) {
-			perfect_match |= (mem_len(m) == read_length) ;
-		}
-		full_read_match += perfect_match;
 	}
-
 
 	// Verify correctness
 	for (int i = 0; i < batch.size(); i++) {
@@ -537,6 +529,11 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		for (int j = 0; j < smems.size(); j++) {
 			assert(mem_eq(smems[j], truth_set[j]));
 		}
+		bool perfect_match = false;
+		for (auto &m : smems) {
+			perfect_match |= (mem_len(m) == read_length) ;
+		}
+		full_read_match += perfect_match;
 	}
 
 	fprintf(stderr, "Batch %d pass BWA(%.3f,%.3f) COMP(%.3f,%.3f) Gain(%.2f,%.2f)\n",
