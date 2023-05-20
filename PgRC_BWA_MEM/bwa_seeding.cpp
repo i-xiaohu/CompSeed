@@ -237,7 +237,11 @@ SST::SST(const bwt_t *b) {
 
 int SST::query_child(int parent, uint8_t base, bool is_back) {
 	if (nodes[parent].children[base] == -1) {
+		bwt_times++;
+		uint64_t start = __rdtsc();
 		bwt_extend(bwt, &nodes[parent].match, next, is_back);
+		bwt_ticks += __rdtsc() - start;
+
 		for (uint8_t c = 0; c < 4; c++) {
 			SST_Node_t child;
 			child.match = next[c];
@@ -248,7 +252,10 @@ int SST::query_child(int parent, uint8_t base, bool is_back) {
 	auto &c = nodes[nodes[parent].children[base]];
 	// If find an empty node, BWT query is required
 	if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
+		bwt_times++;
+		uint64_t start = __rdtsc();
 		bwt_extend(bwt, &nodes[parent].match, next, is_back);
+		bwt_ticks += __rdtsc() - start;
 		c.match = next[base];
 	}
 	return nodes[parent].children[base];
@@ -456,13 +463,16 @@ static std::string mem_str(const bwtintv_t &a) {
 
 void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch) {
 	forward_sst->clear(); backward_sst->clear();
+	uint64_t tick_start = __rdtsc();
 	for (int i = batch.size() - 1; i >= 0; i--) {
 		auto &read = batch[i];
 		for (int j = 0; j < read.length(); j++) {
 			read[j] = nst_nt4_table[(int) read[j]];
 		}
 
+		long bwt_beg, bwt_end;
 		double cpu_stamp, real_stamp, global_cpu, global_real;
+		bwt_beg = forward_sst->bwt_times + backward_sst->bwt_times;
 		global_cpu = cpu_stamp = cputime(); global_real = real_stamp = realtime();
 		std::vector<bwtintv_t> &smems = batch_mem[i]; smems.clear();
 		for (int j = 0; j < read.length(); ) {
@@ -474,7 +484,10 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			}
 		}
 		comp_cpu.seeding += cputime() - cpu_stamp; comp_real.seeding += realtime() - real_stamp;
+		bwt_end = forward_sst->bwt_times + backward_sst->bwt_times;
+		bwt_times[1] += bwt_end - bwt_beg;
 
+		bwt_beg = forward_sst->bwt_times + backward_sst->bwt_times;
 		cpu_stamp = cputime(); real_stamp = realtime();
 		int old_n = (int)smems.size();
 		for (int j = 0; j < old_n; j++) {
@@ -490,7 +503,10 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			}
 		}
 		comp_cpu.reseed += cputime() - cpu_stamp; comp_real.reseed += realtime() - real_stamp;
+		bwt_end = forward_sst->bwt_times + backward_sst->bwt_times;
+		bwt_times[2] += bwt_end - bwt_beg;
 
+		bwt_beg = forward_sst->bwt_times + backward_sst->bwt_times;
 		cpu_stamp = cputime(); real_stamp = realtime();
 		if (mem_opt->max_mem_intv > 0) {
 			for (int j = 0; j < read.length(); ) {
@@ -505,7 +521,11 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		}
 		comp_cpu.third += cputime() - cpu_stamp; comp_real.third += realtime() - real_stamp;
 		comp_cpu.total += cputime() - global_cpu; comp_real.total += realtime() - global_real;
+		bwt_end = forward_sst->bwt_times + backward_sst->bwt_times;
+		bwt_times[3] += bwt_end - bwt_beg;
 	}
+	total_ticks += __rdtsc() - tick_start;
+
 
 	for (int i = 0; i < batch.size(); i++) {
 		const auto &read = batch[i];
@@ -573,14 +593,13 @@ void BWA_seeding::seeding_SE() {
 			buffer[mis_pos] = code_to_mismatch(buffer[mis_pos], mis_code);
 			curr_mis_cnt++;
 		}
-		// Output strand-corrected reads and shifted distance between consecutive reads
-//		fprintf(stdout, "%s\t%d\n", buffer, hq_reads_list->off[i]);
-
 
 		// Reverse-complement it temporarily
 		if (hq_reads_list->rev_comp[i]) {
 			rev_comp_in_place(buffer, hq_reads_list->read_length);
 		}
+		// Output strand-corrected reads and shifted distance between consecutive reads
+		fprintf(stdout, "%s\t%d\n", buffer, hq_reads_list->off[i]);
 		read_batch.emplace_back(std::string(buffer));
 		offset.push_back(curr_position);
 		if (read_batch.size() >= COMP_BATCH_SIZE or i == hq_reads_list->reads_count - 1) {
@@ -588,7 +607,6 @@ void BWA_seeding::seeding_SE() {
 			read_batch.clear();
 			offset.clear();
 		}
-//		if (batch_id > 3000) break;
 	}
 	delete forward_sst;
 	delete backward_sst;
@@ -723,6 +741,8 @@ void BWA_seeding::on_dec_reads(const char *fn) {
 	fprintf(stderr, "  S2    %.2f\t%.2f\t%.2f\n", bwa_cpu.reseed, comp_cpu.reseed, comp_cpu.reseed / bwa_cpu.reseed);
 	fprintf(stderr, "  S3    %.2f\t%.2f\t%.2f\n", bwa_cpu.third, comp_cpu.third, comp_cpu.third / bwa_cpu.third);
 	fprintf(stderr, "Perfect Matched Reads: %d (%.2f %%)\n", full_read_match, 100.0 * full_read_match / hq_reads_count);
+	fprintf(stderr, "BWT operations %ld, %ld, %ld\n", bwt_times[1], bwt_times[2], bwt_times[3]);
+	fprintf(stderr, "BWT tick percentage %.2f\n", 100.0 * (forward_sst->bwt_ticks + backward_sst->bwt_ticks) / total_ticks);
 
 	free(mem_opt);
 	in.close();

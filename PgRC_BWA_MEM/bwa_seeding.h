@@ -20,6 +20,24 @@ static const char PGRC_VERSION_MAJOR = 1;
 static const char PGRC_VERSION_MINOR = 2;
 static const char PGRC_VERSION_REVISION = 2;
 
+#if defined(__GNUC__) && !defined(__clang__)
+#if defined(__i386__)
+static inline unsigned long long __rdtsc(void)
+{
+    unsigned long long int x;
+    __asm__ volatile (".byte 0x0f, 0x31" : "=A" (x));
+    return x;
+}
+#elif defined(__x86_64__)
+static inline unsigned long long __rdtsc(void)
+{
+	unsigned hi, lo;
+	__asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
+	return ( (unsigned long long)lo)|( ((unsigned long long)hi)<<32 );
+}
+#endif
+#endif
+
 typedef struct {
 	bwtintv_v mem, mem1, *tmpv[2];
 } smem_aux_t;
@@ -73,6 +91,10 @@ private:
 
 public:
 	explicit SST(const bwt_t *b);
+
+	long bwt_times = 0;
+	long bwt_ticks = 0;
+
 
 	/** At parent node with prefix p, query child node for p + base.
 	 * If the child node does not exist, query it from FMD-index. */
@@ -173,6 +195,8 @@ private:
 
 	time_rec_t comp_cpu, comp_real;
 	time_rec_t bwa_cpu, bwa_real;
+	long bwt_times[16] = {0};
+	uint64_t total_ticks = 0;
 
 public:
 	void set_archive_name(const char *fn) { this->archive_name = fn; }
