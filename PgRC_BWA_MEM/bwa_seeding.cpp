@@ -165,17 +165,125 @@ void smem_aux_destroy(smem_aux_t *a) {
 	free(a);
 }
 
+static void bwt_reverse_intvs(bwtintv_v *p) {
+	if (p->n > 1) {
+		int j;
+		for (j = 0; j < p->n>>1; ++j) {
+			bwtintv_t tmp = p->a[p->n - 1 - j];
+			p->a[p->n - 1 - j] = p->a[j];
+			p->a[j] = tmp;
+		}
+	}
+}
+
+int BWA_seeding::super_mem1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_intv, uint64_t max_intv, bwtintv_v *mem, bwtintv_v *tmpvec[2]) {
+	int i, j, c, ret;
+	bwtintv_t ik, ok[4];
+	bwtintv_v a[2], *prev, *curr, *swap;
+
+	mem->n = 0;
+	if (q[x] > 3) return x + 1;
+	if (min_intv < 1) min_intv = 1; // the interval size should be at least 1
+	kv_init(a[0]); kv_init(a[1]);
+	prev = tmpvec && tmpvec[0]? tmpvec[0] : &a[0]; // use the temporary vector if provided
+	curr = tmpvec && tmpvec[1]? tmpvec[1] : &a[1];
+	bwt_set_intv(bwt, q[x], ik); // the initial interval of a single base
+	ik.info = x + 1;
+
+	for (i = x + 1, curr->n = 0; i < len; ++i) { // forward search
+		if (ik.x[2] < max_intv) { // an interval small enough
+			kv_push(bwtintv_t, *curr, ik);
+			break;
+		} else if (q[i] < 4) { // an A/C/G/T base
+			c = 3 - q[i]; // complement of q[i]
+			uint64_t t_start = __rdtsc();
+			bwt_extend(bwt, &ik, ok, 0);
+			bwa_bwt_ticks += __rdtsc() - t_start;
+			global_bwa_bwt++;
+			if (ok[c].x[2] != ik.x[2]) { // change of the interval size
+				kv_push(bwtintv_t, *curr, ik);
+				if (ok[c].x[2] < min_intv) break; // the interval size is too small to be extended further
+			}
+			ik = ok[c]; ik.info = i + 1;
+		} else { // an ambiguous base
+			kv_push(bwtintv_t, *curr, ik);
+			break; // always terminate extension at an ambiguous base; in this case, i<len always stands
+		}
+	}
+	if (i == len) kv_push(bwtintv_t, *curr, ik); // push the last interval if we reach the end
+	bwt_reverse_intvs(curr); // s.t. smaller intervals (i.e. longer matches) visited first
+	ret = curr->a[0].info; // this will be the returned value
+	swap = curr; curr = prev; prev = swap;
+
+	for (i = x - 1; i >= -1; --i) { // backward search for MEMs
+		c = i < 0? -1 : q[i] < 4? q[i] : -1; // c==-1 if i<0 or q[i] is an ambiguous base
+		for (j = 0, curr->n = 0; j < prev->n; ++j) {
+			bwtintv_t *p = &prev->a[j];
+			if (c >= 0 && ik.x[2] >= max_intv) {
+				uint64_t t_start = __rdtsc();
+				bwt_extend(bwt, p, ok, 1);
+				bwa_bwt_ticks += __rdtsc() - t_start;
+				global_bwa_bwt++;
+			}
+			if (c < 0 || ik.x[2] < max_intv || ok[c].x[2] < min_intv) { // keep the hit if reaching the beginning or an ambiguous base or the intv is small enough
+				if (curr->n == 0) { // test curr->n>0 to make sure there are no longer matches
+					if (mem->n == 0 || i + 1 < mem->a[mem->n-1].info>>32) { // skip contained matches
+						ik = *p; ik.info |= (uint64_t)(i + 1)<<32;
+						kv_push(bwtintv_t, *mem, ik);
+					}
+				} // otherwise the match is contained in another longer match
+			} else if (curr->n == 0 || ok[c].x[2] != curr->a[curr->n-1].x[2]) {
+				ok[c].info = p->info;
+				kv_push(bwtintv_t, *curr, ok[c]);
+			}
+		}
+		if (curr->n == 0) break;
+		swap = curr; curr = prev; prev = swap;
+	}
+
+	bwt_reverse_intvs(mem); // s.t. sorted by the start coordinate
+
+	if (tmpvec == 0 || tmpvec[0] == 0) free(a[0].a);
+	if (tmpvec == 0 || tmpvec[1] == 0) free(a[1].a);
+	return ret;
+}
+
+int BWA_seeding::seed_strategy1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_len, int max_intv, bwtintv_t *mem) {
+	int i, c;
+	bwtintv_t ik, ok[4];
+
+	memset(mem, 0, sizeof(bwtintv_t));
+	if (q[x] > 3) return x + 1;
+	bwt_set_intv(bwt, q[x], ik); // the initial interval of a single base
+	for (i = x + 1; i < len; ++i) { // forward search
+		if (q[i] < 4) { // an A/C/G/T base
+			c = 3 - q[i]; // complement of q[i]
+			uint64_t t_start = __rdtsc();
+			bwt_extend(bwt, &ik, ok, 0);
+			bwa_bwt_ticks += __rdtsc() - t_start;
+			global_bwa_bwt++;
+			if (ok[c].x[2] < max_intv && i - x >= min_len) {
+				*mem = ok[c];
+				mem->info = (uint64_t)x<<32 | (i + 1);
+				return i + 1;
+			}
+			ik = ok[c];
+		} else return i + 1;
+	}
+	return len;
+}
+
 void BWA_seeding::mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a) {
 	int i, k, x = 0, old_n;
 	int start_width = 1;
 	int split_len = (int)(opt->min_seed_len * opt->split_factor + .499);
 	a->mem.n = 0;
 	// first pass: find all SMEMs
-	double t_start, t_real;
-	t_start = cputime(); t_real = realtime();
+	long bwt_start = global_bwa_bwt;
+	uint64_t stamp = __rdtsc();
 	while (x < len) {
 		if (seq[x] < 4) {
-			x = bwt_smem1(bwt, len, seq, x, start_width, &a->mem1, a->tmpv);
+			x = super_mem1(bwt, len, seq, x, start_width, 0, &a->mem1, a->tmpv);
 			for (i = 0; i < a->mem1.n; ++i) {
 				bwtintv_t *p = &a->mem1.a[i];
 				int slen = (uint32_t)p->info - (p->info>>32); // seed length
@@ -184,32 +292,36 @@ void BWA_seeding::mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int l
 			}
 		} else ++x;
 	}
-	bwa_cpu.seeding += cputime() - t_start; bwa_real.seeding += realtime() - t_real;
+	bwa_time.seeding += __rdtsc() - stamp;
+	bwa_bwt_calls[1] += global_bwa_bwt - bwt_start;
 
 	// second pass: find MEMs inside a long SMEM
-	t_start = cputime(); t_real = realtime();
+	bwt_start = global_bwa_bwt;
+	stamp = __rdtsc();
 	old_n = a->mem.n;
 	for (k = 0; k < old_n; ++k) {
 		bwtintv_t *p = &a->mem.a[k];
 		int start = p->info>>32, end = (int32_t)p->info;
 		if (end - start < split_len || p->x[2] > opt->split_width) continue;
-		bwt_smem1(bwt, len, seq, (start + end)>>1, p->x[2]+1, &a->mem1, a->tmpv);
+		super_mem1(bwt, len, seq, (start + end)>>1, p->x[2]+1, 0, &a->mem1, a->tmpv);
 		for (i = 0; i < a->mem1.n; ++i)
 			if ((uint32_t)a->mem1.a[i].info - (a->mem1.a[i].info>>32) >= opt->min_seed_len) {
 				kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
 			}
 	}
-	bwa_cpu.reseed += cputime() - t_start; bwa_real.reseed += realtime() - t_real;
+	bwa_time.reseed += __rdtsc() - stamp;
+	bwa_bwt_calls[2] += global_bwa_bwt - bwt_start;
 
 	// third pass: LAST-like
-	t_start = cputime(); t_real = realtime();
+	bwt_start = global_bwa_bwt;
+	stamp = __rdtsc();
 	if (opt->max_mem_intv > 0) {
 		x = 0;
 		while (x < len) {
 			if (seq[x] < 4) {
 				if (1) {
 					bwtintv_t m;
-					x = bwt_seed_strategy1(bwt, len, seq, x, opt->min_seed_len, opt->max_mem_intv, &m);
+					x = seed_strategy1(bwt, len, seq, x, opt->min_seed_len, opt->max_mem_intv, &m);
 					if (m.x[2] > 0) kv_push(bwtintv_t, a->mem, m);
 				} else { // for now, we never come to this block which is slower
 					x = bwt_smem1a(bwt, len, seq, x, start_width, opt->max_mem_intv, &a->mem1, a->tmpv);
@@ -219,7 +331,8 @@ void BWA_seeding::mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int l
 			} else ++x;
 		}
 	}
-	bwa_cpu.third += cputime() - t_start; bwa_real.third += realtime() - t_real;
+	bwa_time.third += __rdtsc() - stamp;
+	bwa_bwt_calls[3] += global_bwa_bwt - bwt_start;
 }
 
 SST::SST(const bwt_t *b) {
@@ -237,10 +350,10 @@ SST::SST(const bwt_t *b) {
 
 int SST::query_child(int parent, uint8_t base, bool is_back) {
 	if (nodes[parent].children[base] == -1) {
-		bwt_times++;
 		uint64_t start = __rdtsc();
 		bwt_extend(bwt, &nodes[parent].match, next, is_back);
 		bwt_ticks += __rdtsc() - start;
+		bwt_times++;
 
 		for (uint8_t c = 0; c < 4; c++) {
 			SST_Node_t child;
@@ -252,10 +365,10 @@ int SST::query_child(int parent, uint8_t base, bool is_back) {
 	auto &c = nodes[nodes[parent].children[base]];
 	// If find an empty node, BWT query is required
 	if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
-		bwt_times++;
 		uint64_t start = __rdtsc();
 		bwt_extend(bwt, &nodes[parent].match, next, is_back);
 		bwt_ticks += __rdtsc() - start;
+		bwt_times++;
 		c.match = next[base];
 	}
 	return nodes[parent].children[base];
@@ -394,17 +507,14 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 				next[c] = backward_sst->get_intv(node_id);
 			}
 			if (c > 3 or next[c].x[2] < min_hits) {
-				assert(aux.curr_intv.empty() and aux.curr_node.empty());
 				if (aux.mem.empty() or i + 1 < aux.mem.back().info >> 32) {
 					ik.info |= (1UL * (i + 1) << 32);
 					aux.mem.push_back(ik);
 				}
-			} else {
-				if (aux.curr_intv.empty() or next[c].x[2] != aux.curr_intv.back().x[2]) {
-					next[c].info = ik.info;
-					aux.curr_intv.push_back(next[c]);
-					aux.curr_node.push_back(node_id);
-				}
+			} else if (aux.curr_intv.empty() or next[c].x[2] != aux.curr_intv.back().x[2]) {
+				next[c].info = ik.info;
+				aux.curr_intv.push_back(next[c]);
+				aux.curr_node.push_back(node_id);
 			}
 		}
 		if (aux.curr_intv.empty()) break;
@@ -470,10 +580,9 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			read[j] = nst_nt4_table[(int) read[j]];
 		}
 
-		long bwt_beg, bwt_end;
-		double cpu_stamp, real_stamp, global_cpu, global_real;
+		long bwt_beg, bwt_end; uint64_t stamp;
 		bwt_beg = forward_sst->bwt_times + backward_sst->bwt_times;
-		global_cpu = cpu_stamp = cputime(); global_real = real_stamp = realtime();
+		stamp = __rdtsc();
 		std::vector<bwtintv_t> &smems = batch_mem[i]; smems.clear();
 		for (int j = 0; j < read.length(); ) {
 			j = collect_smem_with_sst((const uint8_t*)read.c_str(), read.length(), j, 1, thr_aux);
@@ -483,12 +592,12 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 				}
 			}
 		}
-		comp_cpu.seeding += cputime() - cpu_stamp; comp_real.seeding += realtime() - real_stamp;
+		comp_time.seeding += __rdtsc() - stamp;
 		bwt_end = forward_sst->bwt_times + backward_sst->bwt_times;
-		bwt_times[1] += bwt_end - bwt_beg;
+		comp_bwt_calls[1] += bwt_end - bwt_beg;
 
 		bwt_beg = forward_sst->bwt_times + backward_sst->bwt_times;
-		cpu_stamp = cputime(); real_stamp = realtime();
+		stamp = __rdtsc();
 		int old_n = (int)smems.size();
 		for (int j = 0; j < old_n; j++) {
 			const auto &p = smems[j] ;
@@ -502,12 +611,12 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 				}
 			}
 		}
-		comp_cpu.reseed += cputime() - cpu_stamp; comp_real.reseed += realtime() - real_stamp;
+		comp_time.reseed += __rdtsc() - stamp;
 		bwt_end = forward_sst->bwt_times + backward_sst->bwt_times;
-		bwt_times[2] += bwt_end - bwt_beg;
+		comp_bwt_calls[2] += bwt_end - bwt_beg;
 
 		bwt_beg = forward_sst->bwt_times + backward_sst->bwt_times;
-		cpu_stamp = cputime(); real_stamp = realtime();
+		stamp = __rdtsc();
 		if (mem_opt->max_mem_intv > 0) {
 			for (int j = 0; j < read.length(); ) {
 				if (read[j] < 4) {
@@ -519,25 +628,24 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 				}
 			}
 		}
-		comp_cpu.third += cputime() - cpu_stamp; comp_real.third += realtime() - real_stamp;
-		comp_cpu.total += cputime() - global_cpu; comp_real.total += realtime() - global_real;
+		comp_time.third += __rdtsc() - stamp;
 		bwt_end = forward_sst->bwt_times + backward_sst->bwt_times;
-		bwt_times[3] += bwt_end - bwt_beg;
+		comp_bwt_calls[3] += bwt_end - bwt_beg;
 	}
-	total_ticks += __rdtsc() - tick_start;
+	comp_time.total += __rdtsc() - tick_start;
 
 
+	tick_start = __rdtsc();
 	for (int i = 0; i < batch.size(); i++) {
 		const auto &read = batch[i];
-		double cpu_stamp = cputime(); double real_stamp = realtime();
 		mem_collect_intv(mem_opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), mem_aux);
-		bwa_cpu.total += cputime() - cpu_stamp; bwa_real.total += realtime() - real_stamp;
 
 		std::vector<bwtintv_t> &truth_set = truth_mem[i]; truth_set.clear();
 		for (int j = 0; j < mem_aux->mem.n; j++) {
 			truth_set.push_back(mem_aux->mem.a[j]);
 		}
 	}
+	bwa_time.total += __rdtsc() - tick_start;
 
 	// Verify correctness
 	for (int i = 0; i < batch.size(); i++) {
@@ -556,18 +664,11 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		full_read_match += perfect_match;
 	}
 
-	fprintf(stderr, "Batch %d pass BWA(%.3f,%.3f) COMP(%.3f,%.3f) Gain(%.2f,%.2f)\n",
+	fprintf(stderr, "Batch %d pass BWA(%.3f) COMP(%.3f) Gain(%.2f)\n",
 		 ++batch_id,
-		 bwa_cpu.total, bwa_real.total, comp_cpu.total, comp_real.total,
-		 comp_cpu.total / bwa_cpu.total, comp_real.total / bwa_real.total);
-	fprintf(stderr, "BWA-MEM: Seeding %.2f, Reseed %.2f, Third %.2f\n",
-		 100 * bwa_cpu.seeding / bwa_cpu.total,
-		 100 * bwa_cpu.reseed / bwa_cpu.total,
-		 100 * bwa_cpu.third / bwa_cpu.total);
-	fprintf(stderr, "COMP:    Seeding %.2f, Reseed %.2f, Third %.2f\n",
-		 100 * comp_cpu.seeding / comp_cpu.total,
-		 100 * comp_cpu.reseed / comp_cpu.total,
-		 100 * comp_cpu.third / comp_cpu.total);
+		 1.0 * bwa_time.total / cpu_frequency,
+		 1.0 * comp_time.total / cpu_frequency,
+		 1.0 * comp_time.total / bwa_time.total);
 }
 
 void BWA_seeding::seeding_SE() {
@@ -599,24 +700,18 @@ void BWA_seeding::seeding_SE() {
 			rev_comp_in_place(buffer, hq_reads_list->read_length);
 		}
 		// Output strand-corrected reads and shifted distance between consecutive reads
-		fprintf(stdout, "%s\t%d\n", buffer, hq_reads_list->off[i]);
 		read_batch.emplace_back(std::string(buffer));
 		offset.push_back(curr_position);
 		if (read_batch.size() >= COMP_BATCH_SIZE or i == hq_reads_list->reads_count - 1) {
-//			test_a_batch(offset, read_batch);
+			test_a_batch(offset, read_batch);
 			read_batch.clear();
 			offset.clear();
 		}
+		if (batch_id > 3000) break;
 	}
 	delete forward_sst;
 	delete backward_sst;
 	smem_aux_destroy(mem_aux);
-	fprintf(stderr, "Overall BWA\tCOMP\tGAIN\n");
-	fprintf(stderr, "  Total %.2f\t%.2f\t%.2f\n", bwa_cpu.total, comp_cpu.total, comp_cpu.total / bwa_cpu.total);
-	fprintf(stderr, "  S1    %.2f\t%.2f\t%.2f\n", bwa_cpu.seeding, comp_cpu.seeding, comp_cpu.seeding / bwa_cpu.seeding);
-	fprintf(stderr, "  S2    %.2f\t%.2f\t%.2f\n", bwa_cpu.reseed, comp_cpu.reseed, comp_cpu.reseed / bwa_cpu.reseed);
-	fprintf(stderr, "  S3    %.2f\t%.2f\t%.2f\n", bwa_cpu.third, comp_cpu.third, comp_cpu.third / bwa_cpu.third);
-	fprintf(stderr, "Perfect Matched Reads: %d (%.2f %%)\n", full_read_match, 100.0 * full_read_match / hq_reads_count);
 
 	// Restoring LQ reads
 	curr_position = 0;
@@ -710,6 +805,8 @@ void BWA_seeding::on_dec_reads(const char *fn) {
 	}
 	mem_opt = mem_opt_init();
 
+	uint64_t stamp = __rdtsc(); sleep(1); cpu_frequency = __rdtsc() - stamp;
+
 	fprintf(stderr, "Input test data with strand-corrected reads and overlapping information\n");
 	std::ifstream in(fn); assert(in.is_open());
 	std::vector<std::string> read_batch;
@@ -735,14 +832,19 @@ void BWA_seeding::on_dec_reads(const char *fn) {
 	}
 
 	fprintf(stderr, "Input %d reads in total\n", total_reads_count);
-	fprintf(stderr, "Overall BWA\tCOMP\tGAIN\n");
-	fprintf(stderr, "  Total %.2f\t%.2f\t%.2f\n", bwa_cpu.total, comp_cpu.total, comp_cpu.total / bwa_cpu.total);
-	fprintf(stderr, "  S1    %.2f\t%.2f\t%.2f\n", bwa_cpu.seeding, comp_cpu.seeding, comp_cpu.seeding / bwa_cpu.seeding);
-	fprintf(stderr, "  S2    %.2f\t%.2f\t%.2f\n", bwa_cpu.reseed, comp_cpu.reseed, comp_cpu.reseed / bwa_cpu.reseed);
-	fprintf(stderr, "  S3    %.2f\t%.2f\t%.2f\n", bwa_cpu.third, comp_cpu.third, comp_cpu.third / bwa_cpu.third);
+	fprintf(stderr, "Overall BWA\tCOMP\tGAIN\tBWT Gain\n");
+	fprintf(stderr, "  Total %.2f\t%.2f\t%.2f\n", __time(bwa_time.total), __time(comp_time.total), 1.0 * comp_time.total / bwa_time.total);
+	fprintf(stderr, "  S1    %.2f\t%.2f\t%.2f\n", __time(bwa_time.seeding), __time(comp_time.seeding), 1.0 * comp_time.seeding / bwa_time.seeding);
+	fprintf(stderr, "  S2    %.2f\t%.2f\t%.2f\n", __time(bwa_time.reseed), __time(comp_time.reseed), 1.0 * comp_time.reseed / bwa_time.reseed);
+	fprintf(stderr, "  S3    %.2f\t%.2f\t%.2f\n", __time(bwa_time.third), __time(comp_time.third), 1.0 * comp_time.third / bwa_time.third);
 	fprintf(stderr, "Perfect Matched Reads: %d (%.2f %%)\n", full_read_match, 100.0 * full_read_match / hq_reads_count);
-	fprintf(stderr, "BWT operations %ld, %ld, %ld\n", bwt_times[1], bwt_times[2], bwt_times[3]);
-	fprintf(stderr, "BWT tick percentage %.2f\n", 100.0 * (forward_sst->bwt_ticks + backward_sst->bwt_ticks) / total_ticks);
+	fprintf(stderr, "BWT Gain: Seeding(%.2f) Reseed(%.2f) Third(%.2f) Total(%.2f)\n",
+		 1.0 * comp_bwt_calls[1] / bwa_bwt_calls[1],
+		 1.0 * comp_bwt_calls[2] / bwa_bwt_calls[2],
+		 1.0 * comp_bwt_calls[3] / bwa_bwt_calls[3],
+		 1.0 * (comp_bwt_calls[1] + comp_bwt_calls[2] + comp_bwt_calls[3]) / (bwa_bwt_calls[1] + bwa_bwt_calls[2] + bwa_bwt_calls[3]));
+	fprintf(stderr, "Comp BWT percentage %.2f\n", 100.0 * (forward_sst->bwt_ticks + backward_sst->bwt_ticks) / comp_time.total);
+	fprintf(stderr, "BWA  BWT percentage %.2f\n", 100.0 * bwa_bwt_ticks / bwa_time.total);
 
 	free(mem_opt);
 	in.close();

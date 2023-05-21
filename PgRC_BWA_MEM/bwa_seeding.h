@@ -93,7 +93,7 @@ public:
 	explicit SST(const bwt_t *b);
 
 	long bwt_times = 0;
-	long bwt_ticks = 0;
+	uint64_t bwt_ticks = 0;
 
 
 	/** At parent node with prefix p, query child node for p + base.
@@ -130,7 +130,7 @@ struct thread_aux_t {
 };
 
 struct time_rec_t {
-	double seeding, reseed, third, sal, total;
+	uint64_t seeding, reseed, third, sal, total;
 	time_rec_t():seeding(0), reseed(0), third(0), sal(0), total(0) {}
 };
 
@@ -193,10 +193,14 @@ private:
 	std::vector<bwtintv_t> batch_mem[1024];
 	std::vector<bwtintv_t> truth_mem[1024];
 
-	time_rec_t comp_cpu, comp_real;
-	time_rec_t bwa_cpu, bwa_real;
-	long bwt_times[16] = {0};
-	uint64_t total_ticks = 0;
+	time_rec_t bwa_time, comp_time;
+	long comp_bwt_calls[16] = {0};
+	long bwa_bwt_calls[16] = {0};
+	uint64_t cpu_frequency = 1;
+	uint64_t bwa_bwt_ticks = 0;
+	long global_bwa_bwt = 0;
+
+	inline double __time(uint64_t x) { return 1.0 * x / cpu_frequency; }
 
 public:
 	void set_archive_name(const char *fn) { this->archive_name = fn; }
@@ -209,6 +213,10 @@ public:
 	void compressive_seeding();
 
 	void set_index_name(const char *fn) { this->index_name = fn; }
+
+	int super_mem1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_intv, uint64_t max_intv, bwtintv_v *mem, bwtintv_v *tmpvec[2]);
+
+	int seed_strategy1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_len, int max_intv, bwtintv_t *mem);
 
 	void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a);
 
