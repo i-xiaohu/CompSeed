@@ -88,7 +88,7 @@ typedef kvec_t(SST_Node_t) SST_Node_v;
 
 class SST {
 private:
-	SST_Node_v nodes;
+	std::vector<SST_Node_t> nodes;
 	const bwt_t *bwt;
 	bwtintv_t next[4];
 
@@ -115,15 +115,15 @@ public:
 	 * suffixes is unknown so {0,0,0} is used to mark such nodes in SST. */
 	inline int add_empty_child(int parent, uint8_t base);
 
-	inline bwtintv_t get_intv(int id) { return nodes.a[id].match; }
+	inline bwtintv_t get_intv(int id) { return nodes[id].match; }
 
-	inline int get_child(int parent, uint8_t base) { return nodes.a[parent].children[base]; }
+	inline int get_child(int parent, uint8_t base) { return nodes[parent].children[base]; }
 
 	/** Only keep root and its four children */
 	inline void clear() {
-		nodes.n = 5;
+		nodes.resize(5);
 		for (int i = 1; i <= 4; i++) {
-			for (int &c : nodes.a[i].children) {
+			for (int &c : nodes[i].children) {
 				c = -1;
 			}
 		}
@@ -131,69 +131,69 @@ public:
 };
 
 inline int SST::query_forward_child(int parent, uint8_t base) {
-	if (nodes.a[parent].children[base] == -1) {
+	if (nodes[parent].children[base] == -1) {
 		uint64_t start = __rdtsc();
-		bwt_extend(bwt, &nodes.a[parent].match, next, 0);
+		bwt_extend(bwt, &nodes[parent].match, next, 0);
 		bwt_ticks += __rdtsc() - start;
 		bwt_calls++;
 
 		SST_Node_t child;
 		child.match = next[base];
-		nodes.a[parent].children[base] = nodes.n;
-		kv_push(SST_Node_t, nodes, child);
+		nodes[parent].children[base] = nodes.size();
+		nodes.push_back(child);
 	}
-	return nodes.a[parent].children[base];
+	return nodes[parent].children[base];
 }
 
 inline int SST::query_backward_child(int parent, uint8_t base) {
-	if (nodes.a[parent].children[base] == -1) {
+	if (nodes[parent].children[base] == -1) {
 		uint64_t start = __rdtsc();
-		bwt_extend(bwt, &nodes.a[parent].match, next, 1);
+		bwt_extend(bwt, &nodes[parent].match, next, 1);
 		bwt_ticks += __rdtsc() - start;
 		bwt_calls++;
 
 		SST_Node_t child;
 		child.match = next[base];
-		nodes.a[parent].children[base] = nodes.n;
-		kv_push(SST_Node_t, nodes, child);
+		nodes[parent].children[base] = nodes.size();
+		nodes.push_back(child);
 	}
-	auto &c = nodes.a[nodes.a[parent].children[base]];
+	auto &c = nodes[nodes[parent].children[base]];
 	// If find an empty node, BWT query is required
 	if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
 		uint64_t start = __rdtsc();
-		bwt_extend(bwt, &nodes.a[parent].match, next, 1);
+		bwt_extend(bwt, &nodes[parent].match, next, 1);
 		bwt_ticks += __rdtsc() - start;
 		bwt_calls++;
 		c.match = next[base];
 	}
-	return nodes.a[parent].children[base];
+	return nodes[parent].children[base];
 }
 
 inline int SST::add_lep_child(int parent, uint8_t base, const uint64_t *x) {
-	if (nodes.a[parent].children[base] == -1) {
-		nodes.a[parent].children[base] = nodes.n;
+	if (nodes[parent].children[base] == -1) {
+		nodes[parent].children[base] = nodes.size();
 		SST_Node_t child;
 		child.match.x[0] = x[0];
 		child.match.x[1] = x[1];
 		child.match.x[2] = x[2];
-		kv_push(SST_Node_t, nodes, child);
+		nodes.push_back(child);
 	} else {
-		auto &c = nodes.a[nodes.a[parent].children[base]];
+		auto &c = nodes[nodes[parent].children[base]];
 		c.match.x[0] = x[0];
 		c.match.x[1] = x[1];
 		c.match.x[2] = x[2];
 	}
-	return nodes.a[parent].children[base];
+	return nodes[parent].children[base];
 }
 
 inline int SST::add_empty_child(int parent, uint8_t base) {
-	if (nodes.a[parent].children[base] == -1) {
-		nodes.a[parent].children[base] = nodes.n;
+	if (nodes[parent].children[base] == -1) {
+		nodes[parent].children[base] = nodes.size();
 		SST_Node_t child;
 		child.match.x[0] = child.match.x[1] = child.match.x[2] = 0;
-		kv_push(SST_Node_t, nodes, child);
+		nodes.push_back(child);
 	} // else do nothing whatever the child node is empty or not
-	return nodes.a[parent].children[base];
+	return nodes[parent].children[base];
 }
 
 struct thread_aux_t {
