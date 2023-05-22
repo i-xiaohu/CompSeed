@@ -9,6 +9,7 @@
 #include <vector>
 #include "../PseudoGenome/SeparatedPG.h"
 #include "../bwalib/bwa.h"
+#include "../cstl/kvec.h"
 
 static const char PGRC_SE_MODE = 0; // reordered Singled End
 static const char PGRC_PE_MODE = 1; // reordered Paired End
@@ -83,50 +84,123 @@ struct SST_Node_t {
 	SST_Node_t() { children[0] = children[1] = children[2] = children[3] = -1; }
 };
 
+typedef kvec_t(SST_Node_t) SST_Node_v;
+
 class SST {
 private:
-	std::vector<SST_Node_t> nodes;
+	SST_Node_v nodes;
 	const bwt_t *bwt;
 	bwtintv_t next[4];
 
 public:
 	explicit SST(const bwt_t *b);
 
-	long bwt_times = 0;
+	long bwt_calls = 0;
 	uint64_t bwt_ticks = 0;
+	uint64_t query_ticks = 0;
 
 
 	/** At parent node with prefix p, query child node for p + base.
 	 * If the child node does not exist, query it from FMD-index. */
 	int query_child(int parent, uint8_t base, bool is_back);
 
+	inline int query_forward_child(int parent, uint8_t base);
+
+	inline int query_backward_child(int parent, uint8_t base);
+
 	/** Add [pivot, LEP] to backward SST. */
-	int add_lep_child(int parent, uint8_t base, const uint64_t *x);
+	inline int add_lep_child(int parent, uint8_t base, const uint64_t *x);
 
 	/** Add suffixes of [pivot + 1, LEP] to backward SST. But SA interval of
 	 * suffixes is unknown so {0,0,0} is used to mark such nodes in SST. */
-	int add_empty_child(int parent, uint8_t base);
+	inline int add_empty_child(int parent, uint8_t base);
 
-	inline bwtintv_t get_intv(int id) { return nodes[id].match; }
+	inline bwtintv_t get_intv(int id) { return nodes.a[id].match; }
 
-	inline int get_child(int parent, uint8_t base) { return nodes[parent].children[base]; }
+	inline int get_child(int parent, uint8_t base) { return nodes.a[parent].children[base]; }
 
 	/** Only keep root and its four children */
 	inline void clear() {
-		nodes.resize(5);
+		nodes.n = 5;
 		for (int i = 1; i <= 4; i++) {
-			for (int &c : nodes[i].children) {
+			for (int &c : nodes.a[i].children) {
 				c = -1;
 			}
 		}
 	}
 };
 
+inline int SST::query_forward_child(int parent, uint8_t base) {
+	if (nodes.a[parent].children[base] == -1) {
+		uint64_t start = __rdtsc();
+		bwt_extend(bwt, &nodes.a[parent].match, next, 0);
+		bwt_ticks += __rdtsc() - start;
+		bwt_calls++;
+
+		SST_Node_t child;
+		child.match = next[base];
+		nodes.a[parent].children[base] = nodes.n;
+		kv_push(SST_Node_t, nodes, child);
+	}
+	return nodes.a[parent].children[base];
+}
+
+inline int SST::query_backward_child(int parent, uint8_t base) {
+	if (nodes.a[parent].children[base] == -1) {
+		uint64_t start = __rdtsc();
+		bwt_extend(bwt, &nodes.a[parent].match, next, 1);
+		bwt_ticks += __rdtsc() - start;
+		bwt_calls++;
+
+		SST_Node_t child;
+		child.match = next[base];
+		nodes.a[parent].children[base] = nodes.n;
+		kv_push(SST_Node_t, nodes, child);
+	}
+	auto &c = nodes.a[nodes.a[parent].children[base]];
+	// If find an empty node, BWT query is required
+	if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
+		uint64_t start = __rdtsc();
+		bwt_extend(bwt, &nodes.a[parent].match, next, 1);
+		bwt_ticks += __rdtsc() - start;
+		bwt_calls++;
+		c.match = next[base];
+	}
+	return nodes.a[parent].children[base];
+}
+
+inline int SST::add_lep_child(int parent, uint8_t base, const uint64_t *x) {
+	if (nodes.a[parent].children[base] == -1) {
+		nodes.a[parent].children[base] = nodes.n;
+		SST_Node_t child;
+		child.match.x[0] = x[0];
+		child.match.x[1] = x[1];
+		child.match.x[2] = x[2];
+		kv_push(SST_Node_t, nodes, child);
+	} else {
+		auto &c = nodes.a[nodes.a[parent].children[base]];
+		c.match.x[0] = x[0];
+		c.match.x[1] = x[1];
+		c.match.x[2] = x[2];
+	}
+	return nodes.a[parent].children[base];
+}
+
+inline int SST::add_empty_child(int parent, uint8_t base) {
+	if (nodes.a[parent].children[base] == -1) {
+		nodes.a[parent].children[base] = nodes.n;
+		SST_Node_t child;
+		child.match.x[0] = child.match.x[1] = child.match.x[2] = 0;
+		kv_push(SST_Node_t, nodes, child);
+	} // else do nothing whatever the child node is empty or not
+	return nodes.a[parent].children[base];
+}
+
 struct thread_aux_t {
 	std::vector<bwtintv_t> prev_intv, curr_intv; // Buffer for forward search LEP and backward extension
 	std::vector<int> prev_node, curr_node; // Buffer for SST node indexes
 	std::vector<bwtintv_t> mem; // Storing all SMEMs
-	std::vector<bwtintv_t> ans; // Storing all SMEMs with length >= minimal seed length
+//	std::vector<bwtintv_t> ans; // Storing all SMEMs with length >= minimal seed length
 };
 
 struct time_rec_t {

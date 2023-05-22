@@ -336,42 +336,43 @@ void BWA_seeding::mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int l
 }
 
 SST::SST(const bwt_t *b) {
+	kv_init(nodes);
 	bwt = b;
 	SST_Node_t root;
 	for (int i = 0; i < 4; i++) root.children[i] = i + 1;
-	nodes.push_back(root);
+	kv_push(SST_Node_t, nodes, root);
 
 	SST_Node_t child;
 	for (uint8_t c = 0; c < 4; c++) {
 		bwt_set_intv(bwt, c, child.match);
-		nodes.push_back(child);
+		kv_push(SST_Node_t, nodes, child);
 	}
 }
 
 int SST::query_child(int parent, uint8_t base, bool is_back) {
-	if (nodes[parent].children[base] == -1) {
+	if (nodes.a[parent].children[base] == -1) {
 		uint64_t start = __rdtsc();
-		bwt_extend(bwt, &nodes[parent].match, next, is_back);
+		bwt_extend(bwt, &nodes.a[parent].match, next, is_back);
 		bwt_ticks += __rdtsc() - start;
-		bwt_times++;
+		bwt_calls++;
 
-		for (uint8_t c = 0; c < 4; c++) {
+		for (uint8_t c = 0; c < 4; c++) { // Is it necessary?
 			SST_Node_t child;
 			child.match = next[c];
-			nodes[parent].children[c] = (int)nodes.size();
-			nodes.push_back(child);
+			nodes.a[parent].children[c] = nodes.n;
+			kv_push(SST_Node_t, nodes, child);
 		}
 	}
-	auto &c = nodes[nodes[parent].children[base]];
+	auto &c = nodes.a[nodes.a[parent].children[base]];
 	// If find an empty node, BWT query is required
 	if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
 		uint64_t start = __rdtsc();
-		bwt_extend(bwt, &nodes[parent].match, next, is_back);
+		bwt_extend(bwt, &nodes.a[parent].match, next, is_back);
 		bwt_ticks += __rdtsc() - start;
-		bwt_times++;
+		bwt_calls++;
 		c.match = next[base];
 	}
-	return nodes[parent].children[base];
+	return nodes.a[parent].children[base];
 }
 
 static bool check_mem(const bwt_t *bwt, const std::string &s, const bwtintv_t &ref) {
@@ -392,25 +393,6 @@ static bool check_mem(const bwt_t *bwt, const std::string &s, const bwtintv_t &r
 	return correct;
 }
 
-int SST::add_lep_child(int parent, uint8_t base, const uint64_t *x) {
-	if (nodes[parent].children[base] == -1) {
-		nodes[parent].children[base] = (int)nodes.size();
-		SST_Node_t child;
-		child.match.x[0] = x[0];
-		child.match.x[1] = x[1];
-		child.match.x[2] = x[2];
-		nodes.push_back(child);
-	} else {
-		auto &c = nodes[nodes[parent].children[base]];
-		if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
-			c.match.x[0] = x[0];
-			c.match.x[1] = x[1];
-			c.match.x[2] = x[2];
-		}
-	}
-	return nodes[parent].children[base];
-}
-
 static bool check_mem(const bwt_t *bwt, const uint8_t *seq, int start, int end, const bwtintv_t &ref) {
 	bwtintv_t ik, ok[4];
 	bwt_set_intv(bwt, seq[start], ik);
@@ -419,19 +401,6 @@ static bool check_mem(const bwt_t *bwt, const uint8_t *seq, int start, int end, 
 		ik = ok[3 - seq[i]];
 	}
 	return ref.x[0] == ik.x[0] and ref.x[1] == ik.x[1] and ref.x[2] == ik.x[2];
-}
-
-int SST::add_empty_child(int parent, uint8_t base) {
-	auto &p = nodes[parent];
-	if (nodes[parent].children[base] == -1) {
-		nodes[parent].children[base] = (int)nodes.size();
-		SST_Node_t child;
-		child.match.x[0] = 0;
-		child.match.x[1] = 0;
-		child.match.x[2] = 0;
-		nodes.push_back(child);
-	} // else do nothing whatever the child node is empty or not
-	return nodes[parent].children[base];
 }
 
 static void dfs_print_tree(SST *tree, int node, std::string &prefix) {
@@ -453,7 +422,7 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 	aux.mem.clear();
 	if (seq[pivot] > 3) return pivot + 1;
 	bwtintv_t ik, next[4];
-	int node_id = forward_sst->query_child(0, seq[pivot], true);
+	int node_id = forward_sst->query_forward_child(0, seq[pivot]);
 	ik = forward_sst->get_intv(node_id);
 	ik.info = pivot + 1;
 	aux.prev_intv.clear();
@@ -461,7 +430,7 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 	for (int i = pivot + 1; i < len; i++) {
 		if (seq[i] < 4) {
 			int c = 3 - seq[i];
-			node_id = forward_sst->query_child(node_id, c, false);
+			node_id = forward_sst->query_forward_child(node_id, c);
 			next[c] = forward_sst->get_intv(node_id);
 			if (next[c].x[2] != ik.x[2]) {
 				aux.prev_intv.push_back(ik);
@@ -489,8 +458,8 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 	aux.prev_node.clear();
 	for (const auto &p : aux.prev_intv) {
 		node_id = 0;
-		for (int i = (int)p.info - 1; i >= pivot + 1; i--) {
-			node_id = backward_sst->add_empty_child(node_id, seq[i]);
+		for (int j = (int)p.info - 1; j >= pivot + 1; j--) {
+			node_id = backward_sst->add_empty_child(node_id, seq[j]);
 		}
 		node_id = backward_sst->add_lep_child(node_id, seq[pivot], p.x);
 		aux.prev_node.push_back(node_id);
@@ -503,7 +472,7 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 			node_id = aux.prev_node[j];
 			ik = aux.prev_intv[j];
 			if (c < 4) {
-				node_id = backward_sst->query_child(node_id, c, true);
+				node_id = backward_sst->query_backward_child(node_id, c);
 				next[c] = backward_sst->get_intv(node_id);
 			}
 			if (c > 3 or next[c].x[2] < min_hits) {
@@ -527,12 +496,12 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 int BWA_seeding::tem_forward_sst(const uint8_t *seq, int len, int start, int min_len, int max_intv, bwtintv_t *mem) {
 	if (seq[start] > 3) return start + 1;
 	memset(mem, 0, sizeof(bwtintv_t));
-	int node_id = forward_sst->query_child(0, seq[start], true);
+	int node_id = forward_sst->query_forward_child(0, seq[start]);
 	bwtintv_t ik = forward_sst->get_intv(node_id);
 	for (int i = start + 1; i < len; i++) {
 		if (seq[i] < 4) {
 			int c = 3 - seq[i];
-			node_id = forward_sst->query_child(node_id, c, false);
+			node_id = forward_sst->query_forward_child(node_id, c);
 			ik = forward_sst->get_intv(node_id);
 			if (ik.x[2] < max_intv && i - start >= min_len) {
 				*mem = ik;
@@ -581,7 +550,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		}
 
 		long bwt_beg, bwt_end; uint64_t stamp;
-		bwt_beg = forward_sst->bwt_times + backward_sst->bwt_times;
+		bwt_beg = forward_sst->bwt_calls + backward_sst->bwt_calls;
 		stamp = __rdtsc();
 		std::vector<bwtintv_t> &smems = batch_mem[i]; smems.clear();
 		for (int j = 0; j < read.length(); ) {
@@ -593,10 +562,10 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			}
 		}
 		comp_time.seeding += __rdtsc() - stamp;
-		bwt_end = forward_sst->bwt_times + backward_sst->bwt_times;
+		bwt_end = forward_sst->bwt_calls + backward_sst->bwt_calls;
 		comp_bwt_calls[1] += bwt_end - bwt_beg;
 
-		bwt_beg = forward_sst->bwt_times + backward_sst->bwt_times;
+		bwt_beg = forward_sst->bwt_calls + backward_sst->bwt_calls;
 		stamp = __rdtsc();
 		int old_n = (int)smems.size();
 		for (int j = 0; j < old_n; j++) {
@@ -612,10 +581,10 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			}
 		}
 		comp_time.reseed += __rdtsc() - stamp;
-		bwt_end = forward_sst->bwt_times + backward_sst->bwt_times;
+		bwt_end = forward_sst->bwt_calls + backward_sst->bwt_calls;
 		comp_bwt_calls[2] += bwt_end - bwt_beg;
 
-		bwt_beg = forward_sst->bwt_times + backward_sst->bwt_times;
+		bwt_beg = forward_sst->bwt_calls + backward_sst->bwt_calls;
 		stamp = __rdtsc();
 		if (mem_opt->max_mem_intv > 0) {
 			for (int j = 0; j < read.length(); ) {
@@ -629,7 +598,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			}
 		}
 		comp_time.third += __rdtsc() - stamp;
-		bwt_end = forward_sst->bwt_times + backward_sst->bwt_times;
+		bwt_end = forward_sst->bwt_calls + backward_sst->bwt_calls;
 		comp_bwt_calls[3] += bwt_end - bwt_beg;
 	}
 	comp_time.total += __rdtsc() - tick_start;
@@ -844,6 +813,7 @@ void BWA_seeding::on_dec_reads(const char *fn) {
 		 1.0 * comp_bwt_calls[3] / bwa_bwt_calls[3],
 		 1.0 * (comp_bwt_calls[1] + comp_bwt_calls[2] + comp_bwt_calls[3]) / (bwa_bwt_calls[1] + bwa_bwt_calls[2] + bwa_bwt_calls[3]));
 	fprintf(stderr, "Comp BWT percentage %.2f\n", 100.0 * (forward_sst->bwt_ticks + backward_sst->bwt_ticks) / comp_time.total);
+	fprintf(stderr, "Comp Que percentage %.2f\n", 100.0 * (forward_sst->query_ticks + backward_sst->query_ticks) / comp_time.total);
 	fprintf(stderr, "BWA  BWT percentage %.2f\n", 100.0 * bwa_bwt_ticks / bwa_time.total);
 
 	free(mem_opt);
