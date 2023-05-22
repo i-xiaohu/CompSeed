@@ -454,40 +454,37 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 	std::reverse(aux.prev_intv.begin(), aux.prev_intv.end());
 
 	// Collect node indexes for LEPs in backward SST
-	aux.prev_node.clear();
-	for (const auto &p : aux.prev_intv) {
+	for (auto &p : aux.prev_intv) {
 		node_id = 0;
 		for (int j = (int)p.info - 1; j >= pivot + 1; j--) {
 			node_id = backward_sst->add_empty_child(node_id, seq[j]);
 		}
 		node_id = backward_sst->add_lep_child(node_id, seq[pivot], p.x);
-		aux.prev_node.push_back(node_id);
+		p.info |= (1UL * node_id << 32);
 	}
 
 	for (int i = pivot - 1; i >= -1; i--) {
 		int c = (i == -1) ?4 :seq[i];
-		aux.curr_intv.clear(); aux.curr_node.clear();
-		for (int j = 0; j < aux.prev_node.size(); j++) {
-			node_id = aux.prev_node[j];
+		aux.curr_intv.clear();
+		for (int j = 0; j < aux.prev_intv.size(); j++) {
 			ik = aux.prev_intv[j];
+			node_id = ik.info >> 32;
 			if (c < 4) {
 				node_id = backward_sst->query_backward_child(node_id, c);
 				next[c] = backward_sst->get_intv(node_id);
 			}
 			if (c > 3 or next[c].x[2] < min_hits) {
 				if (aux.mem.empty() or i + 1 < aux.mem.back().info >> 32) {
-					ik.info |= (1UL * (i + 1) << 32);
+					ik.info = (1UL * (i + 1) << 32) | (int32_t)ik.info;
 					aux.mem.push_back(ik);
 				}
 			} else if (aux.curr_intv.empty() or next[c].x[2] != aux.curr_intv.back().x[2]) {
-				next[c].info = ik.info;
+				next[c].info = (1UL * node_id << 32) | (int32_t)ik.info;
 				aux.curr_intv.push_back(next[c]);
-				aux.curr_node.push_back(node_id);
 			}
 		}
 		if (aux.curr_intv.empty()) break;
 		std::swap(aux.prev_intv, aux.curr_intv);
-		std::swap(aux.prev_node, aux.curr_node);
 	}
 	return ret_pivot;
 }

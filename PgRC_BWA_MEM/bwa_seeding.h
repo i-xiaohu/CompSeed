@@ -84,8 +84,6 @@ struct SST_Node_t {
 	SST_Node_t() { children[0] = children[1] = children[2] = children[3] = -1; }
 };
 
-typedef kvec_t(SST_Node_t) SST_Node_v;
-
 class SST {
 private:
 	std::vector<SST_Node_t> nodes;
