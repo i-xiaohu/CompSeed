@@ -542,6 +542,14 @@ static std::string mem_str(const bwtintv_t &a) {
 	return std::string(buf);
 }
 
+static inline bool merge_cmp0(const bwtintv_t &a, const bwtintv_t &b) {
+	return a.x[0] != b.x[0] ?a.x[0] < b.x[0] :a.x[2] < b.x[2];
+}
+
+static inline bool merge_cmp1(const bwtintv_t &a, const bwtintv_t &b) {
+	return a.x[1] != b.x[1] ?a.x[1] < b.x[1] :a.x[2] < b.x[2];
+}
+
 void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch) {
 	uint64_t tick_start = __rdtsc();
 	forward_sst->clear(); backward_sst->clear();
@@ -604,6 +612,56 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		comp_bwt_calls[3] += bwt_end - bwt_beg;
 		std::sort(smems.begin(), smems.end(), mem_cmp);
 	}
+
+	std::vector<bwtintv_t> collected_mem;
+	for (uint64_t i = 0; i < batch.size(); i++) {
+		const auto &mem = batch_mem[i];
+		for (const auto &m : mem) {
+			collected_mem.push_back(m);
+		}
+	}
+	// X0 repeat
+	std::sort(collected_mem.begin(), collected_mem.end(), merge_cmp0);
+	for (int i = 1; i < collected_mem.size(); i++) {
+		const auto &p = collected_mem[i-1];
+		const auto &m = collected_mem[i];
+		if (p.x[0] != m.x[0] or p.x[2] != m.x[2]) {
+			x0_unique++;
+			x0_sal += std::min((int)p.x[2], mem_opt->max_occ);
+		}
+	}
+	// X1 repeat
+	std::sort(collected_mem.begin(), collected_mem.end(), merge_cmp1);
+	for (int i = 1; i < collected_mem.size(); i++) {
+		const auto &p = collected_mem[i-1];
+		const auto &m = collected_mem[i];
+		if (p.x[1] != m.x[1] or p.x[2] != m.x[2]) {
+			x1_unique++;
+			x1_sal += std::min((int)p.x[2], mem_opt->max_occ);
+		}
+	}
+	total_mem += collected_mem.size();
+	for (const auto &p : collected_mem) {
+		total_sal += std::min((int)p.x[2], mem_opt->max_occ);
+	}
+	// O(N^2) loop
+	for (int i = 0; i < collected_mem.size(); i++) {
+		bool is_unique = true;
+		const auto &c = collected_mem[i];
+		for (int j = 0; j < i; j++) {
+			const auto &p = collected_mem[j];
+			if (p.x[0] == c.x[0] and p.x[2] == c.x[2]) { is_unique = false; break; }
+			if (p.x[1] == c.x[1] and p.x[2] == c.x[2]) { is_unique = false; break; }
+		}
+		if (is_unique) {
+			x_unique++;
+			x_sal += std::min((int)c.x[2], mem_opt->max_occ);
+		}
+	}
+	fprintf(stderr, "Sort0 MEM(%.2f) SAL(%.2f); Sort1 MEM(%.2f) SAL(%.2f); MAX MEM(%.2f) SAL(%.2f)\n",
+	        100.0 * x0_unique / total_mem, 100.0 * x0_sal / total_sal,
+	        100.0 * x1_unique / total_mem, 100.0 * x1_sal / total_sal,
+	        100.0 * x_unique / total_mem, 100.0 * x_sal / total_sal);
 
 	uint64_t sal_tick = __rdtsc();
 	// Find unique MEMs by merging and sorting
