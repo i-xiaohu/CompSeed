@@ -213,6 +213,12 @@ struct Reseed_Item {
 	bool operator < (const Reseed_Item &item) const { return pivot > item.pivot; }
 };
 
+typedef struct {
+	int64_t rbeg;
+	int32_t qbeg, len;
+	int rid, score;
+} mem_seed_t;
+
 class BWA_seeding {
 private:
 	std::string archive_name;
@@ -261,13 +267,17 @@ private:
 
 	SST *forward_sst = nullptr;
 	SST *backward_sst = nullptr;
-	std::vector<Reseed_Item> reseed_items;
 	std::vector<bwtintv_t> batch_mem[1024];
 	std::vector<bwtintv_t> truth_mem[1024];
+	std::vector<bwtintv_t> merge_mem;
+	std::vector<mem_seed_t> unique_seed;
+	std::vector<mem_seed_t> batch_seed[1024];
+	std::vector<mem_seed_t> truth_seed[1024];
 
 	time_rec_t bwa_time, comp_time;
 	long comp_bwt_calls[16] = {0};
 	long bwa_bwt_calls[16] = {0};
+	long comp_sal = 0, bwa_sal = 0;
 	uint64_t cpu_frequency = 1;
 	uint64_t bwa_bwt_ticks = 0;
 	long global_bwa_bwt = 0;
