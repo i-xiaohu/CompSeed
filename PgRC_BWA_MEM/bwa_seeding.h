@@ -264,6 +264,7 @@ private:
 	const int COMP_BATCH_SIZE = 1024; // Process 1024 sorted reads at a time
 	int batch_id = 0;
 	int full_read_match = 0; // How many reads are exactly matched in full length
+	int shortcut = 0;
 
 	SST *forward_sst = nullptr;
 	SST *backward_sst = nullptr;
@@ -307,6 +308,8 @@ public:
 	int tem_forward_sst(const uint8_t *seq, int len, int start, int min_len, int max_intv, bwtintv_t *mem);
 
 	void test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch);
+
+	void display_profile();
 
 	void seeding_SE();
 

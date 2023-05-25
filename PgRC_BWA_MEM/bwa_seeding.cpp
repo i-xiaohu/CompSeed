@@ -545,6 +545,7 @@ static std::string mem_str(const bwtintv_t &a) {
 void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch) {
 	uint64_t tick_start = __rdtsc();
 	forward_sst->clear(); backward_sst->clear();
+	long ref_position = -1;
 	for (int i = batch.size() - 1; i >= 0; i--) {
 		auto &read = batch[i];
 		for (int j = 0; j < read.length(); j++) {
@@ -555,13 +556,53 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		bwt_beg = forward_sst->bwt_calls + backward_sst->bwt_calls;
 		stamp = __rdtsc();
 		std::vector<bwtintv_t> &smems = batch_mem[i]; smems.clear();
-		for (int j = 0; j < read.length(); ) {
-			j = collect_smem_with_sst((const uint8_t*)read.c_str(), read.length(), j, 1, thr_aux);
-			for (const auto &m : thr_aux.mem) {
-				if ((int)m.info - (m.info >> 32) >= mem_opt->min_seed_len) {
-					smems.push_back(m);
+		bool full_match = false;
+		if (ref_position != -1 and ref_position - offset[i] <= read.length() / 3) {
+			// Lookup forward SST to test if this read can be fully matched
+			int node_id = 0;
+			for (int j = ref_position - offset[i]; j < read.length(); j++) {
+				if (read[j] < 4) {
+					if (j == ref_position - offset[i]) node_id = forward_sst->get_child(node_id, read[j]);
+					else node_id = forward_sst->get_child(node_id, 3 - read[j]);
+				} else node_id = -1;
+				if (node_id == -1) break;
+			}
+			if (node_id != -1) {
+				// matched in forward SST till the end of read
+				bwtintv_t ik = forward_sst->get_intv(node_id), ok[4];
+				// It is a potential full-match read
+				long temp_bwt_calls = 0;
+				for (int j = ref_position - offset[i] - 1; j >= 0; j--) {
+					if (read[j] < 4) {
+						bwt_extend(bwa_idx->bwt, &ik, ok, 1);
+						temp_bwt_calls++;
+						ik = ok[read[j]];
+					} else ik.x[2] = 0;
+					if (ik.x[2] == 0) break;
+				}
+				comp_bwt_calls[1] += temp_bwt_calls;
+				if (ik.x[2] > 0) {
+					full_match = true;
+					shortcut++;
+					ik.info = read.length();
+					if (mem_len(ik) >= mem_opt->min_seed_len) smems.push_back(ik);
+				} else {
+					comp_bwt_calls[4] += temp_bwt_calls;
 				}
 			}
+		}
+
+		if (not full_match) {
+			for (int j = 0; j < read.length(); ) {
+				j = collect_smem_with_sst((const uint8_t*)read.c_str(), read.length(), j, 1, thr_aux);
+				for (const auto &m : thr_aux.mem) {
+					if (mem_len(m) >= mem_opt->min_seed_len) {
+						smems.push_back(m);
+					}
+				}
+			}
+//			if (smems.size() == 1 and mem_len(smems[0]) == read.length())
+				ref_position = offset[i];
 		}
 		comp_time.seeding += __rdtsc() - stamp;
 		bwt_end = forward_sst->bwt_calls + backward_sst->bwt_calls;
@@ -717,6 +758,27 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		 1.0 * comp_time.total / bwa_time.total);
 }
 
+void BWA_seeding::display_profile() {
+	fprintf(stderr, "Input %d reads in total\n", total_reads_count);
+	fprintf(stderr, "Overall BWA\tCOMP\tGAIN\n");
+	fprintf(stderr, "  Total %.2f\t%.2f\t%.2f\n", __time(bwa_time.total), __time(comp_time.total), 1.0 * comp_time.total / bwa_time.total);
+	fprintf(stderr, "  S1    %.2f\t%.2f\t%.2f\n", __time(bwa_time.seeding), __time(comp_time.seeding), 1.0 * comp_time.seeding / bwa_time.seeding);
+	fprintf(stderr, "  S2    %.2f\t%.2f\t%.2f\n", __time(bwa_time.reseed), __time(comp_time.reseed), 1.0 * comp_time.reseed / bwa_time.reseed);
+	fprintf(stderr, "  S3    %.2f\t%.2f\t%.2f\n", __time(bwa_time.third), __time(comp_time.third), 1.0 * comp_time.third / bwa_time.third);
+	fprintf(stderr, "  S4    %.2f\t%.2f\t%.2f\n", __time(bwa_time.sal), __time(comp_time.sal), 1.0 * comp_time.sal / bwa_time.sal);
+	fprintf(stderr, "Perfect Matched Reads: %d (%.2f %%)\n", full_read_match, 100.0 * full_read_match / total_reads_count);
+	fprintf(stderr, "Reads go shortcut:     %d (%.2f %%)\n", shortcut, 100.0 * shortcut / total_reads_count);
+	fprintf(stderr, "BWT Gain: Seeding(%.2f) Reseed(%.2f) Third(%.2f) BWT_SUM(%.2f) SAL(%.2f)\n",
+	        1.0 * comp_bwt_calls[1] / bwa_bwt_calls[1],
+	        1.0 * comp_bwt_calls[2] / bwa_bwt_calls[2],
+	        1.0 * comp_bwt_calls[3] / bwa_bwt_calls[3],
+	        1.0 * (comp_bwt_calls[1] + comp_bwt_calls[2] + comp_bwt_calls[3]) / (bwa_bwt_calls[1] + bwa_bwt_calls[2] + bwa_bwt_calls[3]),
+	        1.0 * comp_sal / bwa_sal);
+	fprintf(stderr, "Wasted Comp BWT:    %.2f\n", 100.0 * comp_bwt_calls[4] / comp_bwt_calls[1]);
+	fprintf(stderr, "Comp BWT percentage %.2f\n", 100.0 * (forward_sst->bwt_ticks + backward_sst->bwt_ticks) / comp_time.total);
+	fprintf(stderr, "BWA  BWT percentage %.2f\n", 100.0 * bwa_bwt_ticks / bwa_time.total);
+}
+
 void BWA_seeding::seeding_SE() {
 	std::vector<std::string> read_batch;
 	std::vector<long> offset;
@@ -727,6 +789,7 @@ void BWA_seeding::seeding_SE() {
 	forward_sst = new SST(bwa_idx->bwt);
 	backward_sst = new SST(bwa_idx->bwt);
 	mem_aux = smem_aux_init();
+	mem_opt = mem_opt_init();
 
 	for (int i = 0; i < hq_reads_list->reads_count; i++) {
 		curr_position += hq_reads_list->off[i];
@@ -784,24 +847,9 @@ void BWA_seeding::seeding_SE() {
 			offset.clear();
 		}
 	}
+	display_profile();
 
-	fprintf(stderr, "Input %d reads in total\n", total_reads_count);
-	fprintf(stderr, "Overall BWA\tCOMP\tGAIN\n");
-	fprintf(stderr, "  Total %.2f\t%.2f\t%.2f\n", __time(bwa_time.total), __time(comp_time.total), 1.0 * comp_time.total / bwa_time.total);
-	fprintf(stderr, "  S1    %.2f\t%.2f\t%.2f\n", __time(bwa_time.seeding), __time(comp_time.seeding), 1.0 * comp_time.seeding / bwa_time.seeding);
-	fprintf(stderr, "  S2    %.2f\t%.2f\t%.2f\n", __time(bwa_time.reseed), __time(comp_time.reseed), 1.0 * comp_time.reseed / bwa_time.reseed);
-	fprintf(stderr, "  S3    %.2f\t%.2f\t%.2f\n", __time(bwa_time.third), __time(comp_time.third), 1.0 * comp_time.third / bwa_time.third);
-	fprintf(stderr, "  S4    %.2f\t%.2f\t%.2f\n", __time(bwa_time.sal), __time(comp_time.sal), 1.0 * comp_time.sal / bwa_time.sal);
-	fprintf(stderr, "Perfect Matched Reads: %d (%.2f %%)\n", full_read_match, 100.0 * full_read_match / hq_reads_count);
-	fprintf(stderr, "BWT Gain: Seeding(%.2f) Reseed(%.2f) Third(%.2f) BWT_SUM(%.2f) SAL(%.2f)\n",
-	        1.0 * comp_bwt_calls[1] / bwa_bwt_calls[1],
-	        1.0 * comp_bwt_calls[2] / bwa_bwt_calls[2],
-	        1.0 * comp_bwt_calls[3] / bwa_bwt_calls[3],
-	        1.0 * (comp_bwt_calls[1] + comp_bwt_calls[2] + comp_bwt_calls[3]) / (bwa_bwt_calls[1] + bwa_bwt_calls[2] + bwa_bwt_calls[3]),
-	        1.0 * comp_sal / bwa_sal);
-	fprintf(stderr, "Comp BWT percentage %.2f\n", 100.0 * (forward_sst->bwt_ticks + backward_sst->bwt_ticks) / comp_time.total);
-	fprintf(stderr, "BWA  BWT percentage %.2f\n", 100.0 * bwa_bwt_ticks / bwa_time.total);
-
+	free(mem_opt);
 	delete [] buffer;
 	delete forward_sst;
 	delete backward_sst;
@@ -822,7 +870,6 @@ void BWA_seeding::compressive_seeding() {
 	} else {
 		fprintf(stderr, "Load the FM-index from shared memory\n");
 	}
-	mem_opt = mem_opt_init();
 	uint64_t stamp = __rdtsc(); sleep(1); cpu_frequency = __rdtsc() - stamp;
 
 	std::ifstream in(archive_name); assert(in.is_open());
@@ -909,23 +956,7 @@ void BWA_seeding::on_dec_reads(const char *fn) {
 		}
 		if (batch_id > 3000) break;
 	}
-
-	fprintf(stderr, "Input %d reads in total\n", total_reads_count);
-	fprintf(stderr, "Overall BWA\tCOMP\tGAIN\n");
-	fprintf(stderr, "  Total %.2f\t%.2f\t%.2f\n", __time(bwa_time.total), __time(comp_time.total), 1.0 * comp_time.total / bwa_time.total);
-	fprintf(stderr, "  S1    %.2f\t%.2f\t%.2f\n", __time(bwa_time.seeding), __time(comp_time.seeding), 1.0 * comp_time.seeding / bwa_time.seeding);
-	fprintf(stderr, "  S2    %.2f\t%.2f\t%.2f\n", __time(bwa_time.reseed), __time(comp_time.reseed), 1.0 * comp_time.reseed / bwa_time.reseed);
-	fprintf(stderr, "  S3    %.2f\t%.2f\t%.2f\n", __time(bwa_time.third), __time(comp_time.third), 1.0 * comp_time.third / bwa_time.third);
-	fprintf(stderr, "  S4    %.2f\t%.2f\t%.2f\n", __time(bwa_time.sal), __time(comp_time.sal), 1.0 * comp_time.sal / bwa_time.sal);
-	fprintf(stderr, "Perfect Matched Reads: %d (%.2f %%)\n", full_read_match, 100.0 * full_read_match / hq_reads_count);
-	fprintf(stderr, "BWT Gain: Seeding(%.2f) Reseed(%.2f) Third(%.2f) BWT_SUM(%.2f) SAL(%.2f)\n",
-		 1.0 * comp_bwt_calls[1] / bwa_bwt_calls[1],
-		 1.0 * comp_bwt_calls[2] / bwa_bwt_calls[2],
-		 1.0 * comp_bwt_calls[3] / bwa_bwt_calls[3],
-		 1.0 * (comp_bwt_calls[1] + comp_bwt_calls[2] + comp_bwt_calls[3]) / (bwa_bwt_calls[1] + bwa_bwt_calls[2] + bwa_bwt_calls[3]),
-		 1.0 * comp_sal / bwa_sal);
-	fprintf(stderr, "Comp BWT percentage %.2f\n", 100.0 * (forward_sst->bwt_ticks + backward_sst->bwt_ticks) / comp_time.total);
-	fprintf(stderr, "BWA  BWT percentage %.2f\n", 100.0 * bwa_bwt_ticks / bwa_time.total);
+	display_profile();
 
 	free(mem_opt);
 	in.close();
