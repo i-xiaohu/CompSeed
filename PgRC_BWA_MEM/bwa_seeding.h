@@ -270,7 +270,7 @@ private:
 	std::vector<bwtintv_t> batch_mem[1024];
 	std::vector<bwtintv_t> truth_mem[1024];
 	std::vector<bwtintv_t> merge_mem;
-	std::vector<mem_seed_t> unique_seed;
+	std::vector<uint64_t> unique_seed;
 	std::vector<mem_seed_t> batch_seed[1024];
 	std::vector<mem_seed_t> truth_seed[1024];
 
@@ -281,9 +281,6 @@ private:
 	uint64_t cpu_frequency = 1;
 	uint64_t bwa_bwt_ticks = 0;
 	long global_bwa_bwt = 0;
-
-	long x_unique = 0, x0_unique = 0, x1_unique = 0, total_mem = 0;
-	long x_sal = 0, x0_sal = 0, x1_sal = 0, total_sal = 0;
 
 	inline double __time(uint64_t x) { return 1.0 * x / cpu_frequency; }
 
