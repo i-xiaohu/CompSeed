@@ -157,14 +157,16 @@ inline int SST::query_backward_child(int parent, uint8_t base) {
 	}
 	auto &c = nodes[nodes[parent].children[base]];
 	// If find an empty node, BWT query is required
-	if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
+	if (c.match.x[0] or c.match.x[1] or c.match.x[2]) {
+		return nodes[parent].children[base];
+	} else {
 		uint64_t start = __rdtsc();
 		bwt_extend(bwt, &nodes[parent].match, next, 1);
 		bwt_ticks += __rdtsc() - start;
 		bwt_calls++;
 		c.match = next[base];
+		return nodes[parent].children[base];
 	}
-	return nodes[parent].children[base];
 }
 
 inline int SST::add_lep_child(int parent, uint8_t base, const uint64_t *x) {
@@ -219,6 +221,15 @@ typedef struct {
 	int rid, score;
 } mem_seed_t;
 
+struct SAL_Packed {
+	uint64_t hit_location;
+	uint32_t read_id, array_id;
+	SAL_Packed(uint64_t h, uint32_t r, uint32_t a): hit_location(h), read_id(r), array_id(a) {}
+	bool operator < (const SAL_Packed &a) const {
+		return this->hit_location < a.hit_location;
+	}
+};
+
 class BWA_seeding {
 private:
 	std::string archive_name;
@@ -272,6 +283,7 @@ private:
 	std::vector<bwtintv_t> truth_mem[1024];
 	std::vector<bwtintv_t> merge_mem;
 	std::vector<uint64_t> unique_seed;
+	std::vector<SAL_Packed> unique_sal;
 	std::vector<mem_seed_t> batch_seed[1024];
 	std::vector<mem_seed_t> truth_seed[1024];
 

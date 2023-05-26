@@ -544,13 +544,44 @@ static std::string mem_str(const bwtintv_t &a) {
 
 void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch) {
 	uint64_t tick_start = __rdtsc();
+	for (int i = 0; i < batch.size(); i++) {
+		auto &read = batch[i];
+		for (char &b : read) b = nst_nt4_table[(int) b];
+		mem_collect_intv(mem_opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), mem_aux);
+
+		std::vector<bwtintv_t> &truth_set = truth_mem[i]; truth_set.clear();
+		for (int j = 0; j < mem_aux->mem.n; j++) {
+			truth_set.push_back(mem_aux->mem.a[j]);
+		}
+		std::sort(truth_set.begin(), truth_set.end(), mem_cmp);
+
+		uint64_t sal_tick = __rdtsc();
+		auto &seed = truth_seed[i]; seed.clear();
+		for (const auto &m : truth_set) {
+			const bwtintv_t *p = &m;
+			int step, count, slen = (uint32_t)p->info - (p->info>>32); // seed length
+			int64_t k;
+			// if (slen < opt->min_seed_len) continue; // ignore if too short or too repetitive
+			step = p->x[2] > mem_opt->max_occ? p->x[2] / mem_opt->max_occ : 1;
+			for (k = count = 0; k < p->x[2] && count < mem_opt->max_occ; k += step, ++count) {
+				mem_seed_t s;
+				s.rbeg = bwt_sa(bwa_idx->bwt, p->x[0] + k); // this is the base coordinate in the forward-reverse reference
+				bwa_sal++;
+				s.qbeg = p->info >> 32;
+				s.score = s.len = slen;
+				s.rid = bns_intv2rid(bwa_idx->bns, s.rbeg, s.rbeg + s.len);
+				seed.push_back(s);
+			}
+		}
+		bwa_time.sal += __rdtsc() - sal_tick;
+	}
+	bwa_time.total += __rdtsc() - tick_start;
+
+	tick_start = __rdtsc();
 	forward_sst->clear(); backward_sst->clear();
 	long ref_position = -1;
 	for (int i = batch.size() - 1; i >= 0; i--) {
 		auto &read = batch[i];
-		for (int j = 0; j < read.length(); j++) {
-			read[j] = nst_nt4_table[(int) read[j]];
-		}
 
 		long bwt_beg, bwt_end; uint64_t stamp;
 		bwt_beg = forward_sst->bwt_calls + backward_sst->bwt_calls;
@@ -601,8 +632,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 					}
 				}
 			}
-//			if (smems.size() == 1 and mem_len(smems[0]) == read.length())
-				ref_position = offset[i];
+			ref_position = offset[i];
 		}
 		comp_time.seeding += __rdtsc() - stamp;
 		bwt_end = forward_sst->bwt_calls + backward_sst->bwt_calls;
@@ -646,85 +676,40 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		std::sort(smems.begin(), smems.end(), mem_cmp);
 	}
 
-	// Find unique MEMs by merging and sorting
+	// Find unique hit locations by merging and sorting
 	uint64_t sal_tick = __rdtsc();
-	merge_mem.clear();
-	for (uint64_t i = 0; i < batch.size(); i++) {
-		auto &mem = batch_mem[i];
-		for (uint64_t j = 0; j < mem.size(); j++) {
-			mem[j].x[1] = i << 32U | j;
-			merge_mem.push_back(mem[j]);
-		}
-	}
-	std::sort(merge_mem.begin(), merge_mem.end(), mem_merge_cmp);
-	// Lookup suffix array for unique MEMs
-	int inc_pointer = 0; unique_seed.clear();
-	for (int i = 0; i < merge_mem.size(); i++) {
-		const auto *c = &merge_mem[i]; // Current MEM
-		const auto *p = i == 0 ? nullptr : &merge_mem[i-1]; // Previous MEM
-		if (p == nullptr or p->x[0] != c->x[0] or p->x[2] != c->x[2]) { // Another unique MEM
-			inc_pointer = unique_seed.size();
-			uint64_t step = c->x[2] > mem_opt->max_occ ? c->x[2] / mem_opt->max_occ : 1;
-			for (uint64_t k = 0, count = 0; k < c->x[2] && count < mem_opt->max_occ; k += step, count++) {
-				comp_sal++;
-				unique_seed.push_back(bwt_sa(bwa_idx->bwt, c->x[0] + k));
-			}
-		}
-		int id1 = c->x[1] >> 32, id2 = (int)c->x[1];
-		batch_mem[id1][id2].x[1] = inc_pointer;
-	}
-	// Distribute seeds back to each read
-	for (int i = 0; i < batch.size(); i++) {
-		const auto &mem = batch_mem[i];
-		auto &seed = batch_seed[i]; seed.clear();
+	unique_sal.clear();
+	for (int read_id = 0; read_id < batch.size(); read_id++) {
+		const auto &mem = batch_mem[read_id];
+		auto &seed = batch_seed[read_id]; seed.clear();
+		int array_id = 0;
 		for (const auto &m : mem) {
-			int size = std::min((int)m.x[2], mem_opt->max_occ);
-			int qbeg = mem_beg(m), slen = mem_len(m);
-			for (int j = 0; j < size; j++) {
+			uint64_t step = m.x[2] > mem_opt->max_occ ? m.x[2] / mem_opt->max_occ : 1;
+			for (uint64_t k = 0, count = 0; k < m.x[2] && count < mem_opt->max_occ; k += step, count++) {
 				mem_seed_t s;
-				s.rbeg = unique_seed[m.x[1] + j];
-				s.qbeg = qbeg; s.score = s.len = slen;
-				s.rid = bns_intv2rid(bwa_idx->bns, s.rbeg, s.rbeg + s.len);
+				s.qbeg = mem_beg(m);
+				s.score = s.len = mem_len(m);
 				seed.push_back(s);
+				unique_sal.emplace_back(SAL_Packed(m.x[0] + k, read_id, array_id));
+				array_id++;
 			}
 		}
+	}
+	std::sort(unique_sal.begin(), unique_sal.end());
+	// Lookup suffix array for hit locations
+	uint64_t coordinate = 0;
+	for (int i = 0; i < unique_sal.size(); i++) {
+		const auto &p = unique_sal[i];
+		if (i == 0 or unique_sal[i-1].hit_location != p.hit_location) {
+			coordinate = bwt_sa(bwa_idx->bwt, p.hit_location);
+			comp_sal++;
+		}
+		auto &s = batch_seed[p.read_id][p.array_id];
+		s.rbeg = coordinate;
+		s.rid = bns_intv2rid(bwa_idx->bns, s.rbeg, s.rbeg + s.len);
 	}
 	comp_time.sal += __rdtsc() - sal_tick;
 	comp_time.total += __rdtsc() - tick_start;
-
-
-	tick_start = __rdtsc();
-	for (int i = 0; i < batch.size(); i++) {
-		const auto &read = batch[i];
-		mem_collect_intv(mem_opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), mem_aux);
-
-		std::vector<bwtintv_t> &truth_set = truth_mem[i]; truth_set.clear();
-		for (int j = 0; j < mem_aux->mem.n; j++) {
-			truth_set.push_back(mem_aux->mem.a[j]);
-		}
-		std::sort(truth_set.begin(), truth_set.end(), mem_cmp);
-
-		sal_tick = __rdtsc();
-		auto &seed = truth_seed[i]; seed.clear();
-		for (const auto &m : truth_set) {
-			const bwtintv_t *p = &m;
-			int step, count, slen = (uint32_t)p->info - (p->info>>32); // seed length
-			int64_t k;
-			// if (slen < opt->min_seed_len) continue; // ignore if too short or too repetitive
-			step = p->x[2] > mem_opt->max_occ? p->x[2] / mem_opt->max_occ : 1;
-			for (k = count = 0; k < p->x[2] && count < mem_opt->max_occ; k += step, ++count) {
-				mem_seed_t s;
-				s.rbeg = bwt_sa(bwa_idx->bwt, p->x[0] + k); // this is the base coordinate in the forward-reverse reference
-				bwa_sal++;
-				s.qbeg = p->info >> 32;
-				s.score = s.len = slen;
-				s.rid = bns_intv2rid(bwa_idx->bns, s.rbeg, s.rbeg + s.len);
-				seed.push_back(s);
-			}
-		}
-		bwa_time.sal += __rdtsc() - sal_tick;
-	}
-	bwa_time.total += __rdtsc() - tick_start;
 
 	// Verify correctness
 	for (int i = 0; i < batch.size(); i++) {
@@ -775,8 +760,8 @@ void BWA_seeding::display_profile() {
 	        1.0 * (comp_bwt_calls[1] + comp_bwt_calls[2] + comp_bwt_calls[3]) / (bwa_bwt_calls[1] + bwa_bwt_calls[2] + bwa_bwt_calls[3]),
 	        1.0 * comp_sal / bwa_sal);
 	fprintf(stderr, "Wasted Comp BWT:    %.2f\n", 100.0 * comp_bwt_calls[4] / comp_bwt_calls[1]);
-	fprintf(stderr, "Comp BWT percentage %.2f\n", 100.0 * (forward_sst->bwt_ticks + backward_sst->bwt_ticks) / comp_time.total);
-	fprintf(stderr, "BWA  BWT percentage %.2f\n", 100.0 * bwa_bwt_ticks / bwa_time.total);
+	fprintf(stderr, "Comp BWT percentage %.2f\n", 100.0 * (forward_sst->bwt_ticks + backward_sst->bwt_ticks) / (comp_time.total - comp_time.sal));
+	fprintf(stderr, "BWA  BWT percentage %.2f\n", 100.0 * bwa_bwt_ticks / (bwa_time.total - bwa_time.sal));
 }
 
 void BWA_seeding::seeding_SE() {
@@ -816,7 +801,10 @@ void BWA_seeding::seeding_SE() {
 			read_batch.clear();
 			offset.clear();
 		}
+		if (batch_id > 3000) break;
 	}
+	display_profile();
+	exit(EXIT_SUCCESS);
 
 
 
@@ -954,7 +942,7 @@ void BWA_seeding::on_dec_reads(const char *fn) {
 			read_batch.clear();
 			offset.clear();
 		}
-		if (batch_id > 3000) break;
+		if (batch_id > 5000) break;
 	}
 	display_profile();
 
