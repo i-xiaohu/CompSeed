@@ -176,7 +176,7 @@ static void bwt_reverse_intvs(bwtintv_v *p) {
 	}
 }
 
-int BWA_seeding::super_mem1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_intv, uint64_t max_intv, bwtintv_v *mem, bwtintv_v *tmpvec[2]) {
+int BWA_seeding::super_mem1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_intv, uint64_t max_intv, bwtintv_v *mem, bwtintv_v *tmpvec[2], thread_aux_t &aux) {
 	int i, j, c, ret;
 	bwtintv_t ik, ok[4];
 	bwtintv_v a[2], *prev, *curr, *swap;
@@ -198,8 +198,8 @@ int BWA_seeding::super_mem1(const bwt_t *bwt, int len, const uint8_t *q, int x, 
 			c = 3 - q[i]; // complement of q[i]
 			uint64_t t_start = __rdtsc();
 			bwt_extend(bwt, &ik, ok, 0);
-			bwa_bwt_ticks += __rdtsc() - t_start;
-			global_bwa_bwt++;
+			aux.bwa_bwt_ticks += __rdtsc() - t_start;
+			aux.global_bwa_bwt++;
 			if (ok[c].x[2] != ik.x[2]) { // change of the interval size
 				kv_push(bwtintv_t, *curr, ik);
 				if (ok[c].x[2] < min_intv) break; // the interval size is too small to be extended further
@@ -222,8 +222,8 @@ int BWA_seeding::super_mem1(const bwt_t *bwt, int len, const uint8_t *q, int x, 
 			if (c >= 0 && ik.x[2] >= max_intv) {
 				uint64_t t_start = __rdtsc();
 				bwt_extend(bwt, p, ok, 1);
-				bwa_bwt_ticks += __rdtsc() - t_start;
-				global_bwa_bwt++;
+				aux.bwa_bwt_ticks += __rdtsc() - t_start;
+				aux.global_bwa_bwt++;
 			}
 			if (c < 0 || ik.x[2] < max_intv || ok[c].x[2] < min_intv) { // keep the hit if reaching the beginning or an ambiguous base or the intv is small enough
 				if (curr->n == 0) { // test curr->n>0 to make sure there are no longer matches
@@ -248,7 +248,7 @@ int BWA_seeding::super_mem1(const bwt_t *bwt, int len, const uint8_t *q, int x, 
 	return ret;
 }
 
-int BWA_seeding::seed_strategy1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_len, int max_intv, bwtintv_t *mem) {
+int BWA_seeding::seed_strategy1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_len, int max_intv, bwtintv_t *mem, thread_aux_t &aux) {
 	int i, c;
 	bwtintv_t ik, ok[4];
 
@@ -260,8 +260,8 @@ int BWA_seeding::seed_strategy1(const bwt_t *bwt, int len, const uint8_t *q, int
 			c = 3 - q[i]; // complement of q[i]
 			uint64_t t_start = __rdtsc();
 			bwt_extend(bwt, &ik, ok, 0);
-			bwa_bwt_ticks += __rdtsc() - t_start;
-			global_bwa_bwt++;
+			aux.bwa_bwt_ticks += __rdtsc() - t_start;
+			aux.global_bwa_bwt++;
 			if (ok[c].x[2] < max_intv && i - x >= min_len) {
 				*mem = ok[c];
 				mem->info = (uint64_t)x<<32 | (i + 1);
@@ -273,17 +273,17 @@ int BWA_seeding::seed_strategy1(const bwt_t *bwt, int len, const uint8_t *q, int
 	return len;
 }
 
-void BWA_seeding::mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a) {
+void BWA_seeding::mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a, thread_aux_t &aux) {
 	int i, k, x = 0, old_n;
 	int start_width = 1;
 	int split_len = (int)(opt->min_seed_len * opt->split_factor + .499);
 	a->mem.n = 0;
 	// first pass: find all SMEMs
-	long bwt_start = global_bwa_bwt;
+	long bwt_start = aux.global_bwa_bwt;
 	uint64_t stamp = __rdtsc();
 	while (x < len) {
 		if (seq[x] < 4) {
-			x = super_mem1(bwt, len, seq, x, start_width, 0, &a->mem1, a->tmpv);
+			x = super_mem1(bwt, len, seq, x, start_width, 0, &a->mem1, a->tmpv, aux);
 			for (i = 0; i < a->mem1.n; ++i) {
 				bwtintv_t *p = &a->mem1.a[i];
 				int slen = (uint32_t)p->info - (p->info>>32); // seed length
@@ -292,28 +292,28 @@ void BWA_seeding::mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int l
 			}
 		} else ++x;
 	}
-	bwa_time.seeding += __rdtsc() - stamp;
-	bwa_bwt_calls[1] += global_bwa_bwt - bwt_start;
+	aux.bwa_time.seeding += __rdtsc() - stamp;
+	aux.bwa_bwt_calls[1] += aux.global_bwa_bwt - bwt_start;
 
 	// second pass: find MEMs inside a long SMEM
-	bwt_start = global_bwa_bwt;
+	bwt_start = aux.global_bwa_bwt;
 	stamp = __rdtsc();
 	old_n = a->mem.n;
 	for (k = 0; k < old_n; ++k) {
 		bwtintv_t *p = &a->mem.a[k];
 		int start = p->info>>32, end = (int32_t)p->info;
 		if (end - start < split_len || p->x[2] > opt->split_width) continue;
-		super_mem1(bwt, len, seq, (start + end)>>1, p->x[2]+1, 0, &a->mem1, a->tmpv);
+		super_mem1(bwt, len, seq, (start + end)>>1, p->x[2]+1, 0, &a->mem1, a->tmpv, aux);
 		for (i = 0; i < a->mem1.n; ++i)
 			if ((uint32_t)a->mem1.a[i].info - (a->mem1.a[i].info>>32) >= opt->min_seed_len) {
 				kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
 			}
 	}
-	bwa_time.reseed += __rdtsc() - stamp;
-	bwa_bwt_calls[2] += global_bwa_bwt - bwt_start;
+	aux.bwa_time.reseed += __rdtsc() - stamp;
+	aux.bwa_bwt_calls[2] += aux.global_bwa_bwt - bwt_start;
 
 	// third pass: LAST-like
-	bwt_start = global_bwa_bwt;
+	bwt_start = aux.global_bwa_bwt;
 	stamp = __rdtsc();
 	if (opt->max_mem_intv > 0) {
 		x = 0;
@@ -321,7 +321,7 @@ void BWA_seeding::mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int l
 			if (seq[x] < 4) {
 				if (1) {
 					bwtintv_t m;
-					x = seed_strategy1(bwt, len, seq, x, opt->min_seed_len, opt->max_mem_intv, &m);
+					x = seed_strategy1(bwt, len, seq, x, opt->min_seed_len, opt->max_mem_intv, &m, aux);
 					if (m.x[2] > 0) kv_push(bwtintv_t, a->mem, m);
 				} else { // for now, we never come to this block which is slower
 					x = bwt_smem1a(bwt, len, seq, x, start_width, opt->max_mem_intv, &a->mem1, a->tmpv);
@@ -331,8 +331,8 @@ void BWA_seeding::mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int l
 			} else ++x;
 		}
 	}
-	bwa_time.third += __rdtsc() - stamp;
-	bwa_bwt_calls[3] += global_bwa_bwt - bwt_start;
+	aux.bwa_time.third += __rdtsc() - stamp;
+	aux.bwa_bwt_calls[3] += aux.global_bwa_bwt - bwt_start;
 }
 
 SST::SST(const bwt_t *b) {
@@ -421,16 +421,16 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 	aux.mem.clear();
 	if (seq[pivot] > 3) return pivot + 1;
 	bwtintv_t ik, next[4];
-	int node_id = forward_sst->query_forward_child(0, seq[pivot]);
-	ik = forward_sst->get_intv(node_id);
+	int node_id = aux.forward_sst->query_forward_child(0, seq[pivot]);
+	ik = aux.forward_sst->get_intv(node_id);
 	ik.info = pivot + 1;
 	aux.prev_intv.clear();
 	int ret_pivot = len;
 	for (int i = pivot + 1; i < len; i++) {
 		if (seq[i] < 4) {
 			int c = 3 - seq[i];
-			node_id = forward_sst->query_forward_child(node_id, c);
-			next[c] = forward_sst->get_intv(node_id);
+			node_id = aux.forward_sst->query_forward_child(node_id, c);
+			next[c] = aux.forward_sst->get_intv(node_id);
 			if (next[c].x[2] != ik.x[2]) {
 				aux.prev_intv.push_back(ik);
 				if (next[c].x[2] < min_hits) {
@@ -457,9 +457,9 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 	for (auto &p : aux.prev_intv) {
 		node_id = 0;
 		for (int j = (int)p.info - 1; j >= pivot + 1; j--) {
-			node_id = backward_sst->add_empty_child(node_id, seq[j]);
+			node_id = aux.backward_sst->add_empty_child(node_id, seq[j]);
 		}
-		node_id = backward_sst->add_lep_child(node_id, seq[pivot], p.x);
+		node_id = aux.backward_sst->add_lep_child(node_id, seq[pivot], p.x);
 		p.info |= (1UL * node_id << 32);
 	}
 
@@ -470,8 +470,8 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 			ik = aux.prev_intv[j];
 			node_id = ik.info >> 32;
 			if (c < 4) {
-				node_id = backward_sst->query_backward_child(node_id, c);
-				next[c] = backward_sst->get_intv(node_id);
+				node_id = aux.backward_sst->query_backward_child(node_id, c);
+				next[c] = aux.backward_sst->get_intv(node_id);
 			}
 			if (c > 3 or next[c].x[2] < min_hits) {
 				if (aux.mem.empty() or i + 1 < aux.mem.back().info >> 32) {
@@ -489,16 +489,16 @@ int BWA_seeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 	return ret_pivot;
 }
 
-int BWA_seeding::tem_forward_sst(const uint8_t *seq, int len, int start, int min_len, int max_intv, bwtintv_t *mem) {
+int BWA_seeding::tem_forward_sst(const uint8_t *seq, int len, int start, int min_len, int max_intv, bwtintv_t *mem, thread_aux_t &aux) {
 	if (seq[start] > 3) return start + 1;
 	memset(mem, 0, sizeof(bwtintv_t));
-	int node_id = forward_sst->query_forward_child(0, seq[start]);
-	bwtintv_t ik = forward_sst->get_intv(node_id);
+	int node_id = aux.forward_sst->query_forward_child(0, seq[start]);
+	bwtintv_t ik = aux.forward_sst->get_intv(node_id);
 	for (int i = start + 1; i < len; i++) {
 		if (seq[i] < 4) {
 			int c = 3 - seq[i];
-			node_id = forward_sst->query_forward_child(node_id, c);
-			ik = forward_sst->get_intv(node_id);
+			node_id = aux.forward_sst->query_forward_child(node_id, c);
+			ik = aux.forward_sst->get_intv(node_id);
 			if (ik.x[2] < max_intv && i - start >= min_len) {
 				*mem = ik;
 				mem->info = (1UL * start << 32) | (i + 1);
@@ -542,12 +542,24 @@ static std::string mem_str(const bwtintv_t &a) {
 	return std::string(buf);
 }
 
-void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch) {
+void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch, thread_aux_t &aux) {
+	// Agency of thread auxiliary
+	auto *mem_aux = aux.mem_aux;
+	auto &truth_mem = aux.truth_mem;
+	auto &truth_seed = aux.truth_seed;
+	auto &bwa_time = aux.bwa_time;
+	auto &comp_time = aux.comp_time;
+	auto *forward_sst = aux.forward_sst;
+	auto *backward_sst = aux.backward_sst;
+	auto &batch_mem = aux.batch_mem;
+	auto &batch_seed = aux.batch_seed;
+	auto &unique_sal = aux.unique_sal;
+
 	uint64_t tick_start = __rdtsc();
 	for (int i = 0; i < batch.size(); i++) {
 		auto &read = batch[i];
 		for (char &b : read) b = nst_nt4_table[(int) b];
-		mem_collect_intv(mem_opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), mem_aux);
+		mem_collect_intv(mem_opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), mem_aux, aux);
 
 		std::vector<bwtintv_t> &truth_set = truth_mem[i]; truth_set.clear();
 		for (int j = 0; j < mem_aux->mem.n; j++) {
@@ -566,7 +578,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			for (k = count = 0; k < p->x[2] && count < mem_opt->max_occ; k += step, ++count) {
 				mem_seed_t s;
 				s.rbeg = bwt_sa(bwa_idx->bwt, p->x[0] + k); // this is the base coordinate in the forward-reverse reference
-				bwa_sal++;
+				aux.bwa_sal++;
 				s.qbeg = p->info >> 32;
 				s.score = s.len = slen;
 				s.rid = bns_intv2rid(bwa_idx->bns, s.rbeg, s.rbeg + s.len);
@@ -611,22 +623,22 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 					} else ik.x[2] = 0;
 					if (ik.x[2] == 0) break;
 				}
-				comp_bwt_calls[1] += temp_bwt_calls;
+				aux.comp_bwt_calls[1] += temp_bwt_calls;
 				if (ik.x[2] > 0) {
 					full_match = true;
-					shortcut++;
+					aux.shortcut++;
 					ik.info = read.length();
 					if (mem_len(ik) >= mem_opt->min_seed_len) smems.push_back(ik);
 				} else {
-					comp_bwt_calls[4] += temp_bwt_calls;
+					aux.comp_bwt_calls[4] += temp_bwt_calls;
 				}
 			}
 		}
 
 		if (not full_match) {
 			for (int j = 0; j < read.length(); ) {
-				j = collect_smem_with_sst((const uint8_t*)read.c_str(), read.length(), j, 1, thr_aux);
-				for (const auto &m : thr_aux.mem) {
+				j = collect_smem_with_sst((const uint8_t*)read.c_str(), read.length(), j, 1, aux);
+				for (const auto &m : aux.mem) {
 					if (mem_len(m) >= mem_opt->min_seed_len) {
 						smems.push_back(m);
 					}
@@ -636,7 +648,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		}
 		comp_time.seeding += __rdtsc() - stamp;
 		bwt_end = forward_sst->bwt_calls + backward_sst->bwt_calls;
-		comp_bwt_calls[1] += bwt_end - bwt_beg;
+		aux.comp_bwt_calls[1] += bwt_end - bwt_beg;
 
 		bwt_beg = forward_sst->bwt_calls + backward_sst->bwt_calls;
 		stamp = __rdtsc();
@@ -646,8 +658,8 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			int start = p.info >> 32, end = (int)p.info;
 			if (end - start < (int)(mem_opt->min_seed_len * mem_opt->split_factor + .499)
 			    or p.x[2] > mem_opt->split_width) continue;
-			collect_smem_with_sst((const uint8_t*) read.c_str(), read.length(), (start + end) / 2, p.x[2] + 1, thr_aux);
-			for (const auto &m : thr_aux.mem) {
+			collect_smem_with_sst((const uint8_t*) read.c_str(), read.length(), (start + end) / 2, p.x[2] + 1, aux);
+			for (const auto &m : aux.mem) {
 				if ((int)m.info - (m.info >> 32) >= mem_opt->min_seed_len) {
 					smems.push_back(m);
 				}
@@ -655,7 +667,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		}
 		comp_time.reseed += __rdtsc() - stamp;
 		bwt_end = forward_sst->bwt_calls + backward_sst->bwt_calls;
-		comp_bwt_calls[2] += bwt_end - bwt_beg;
+		aux.comp_bwt_calls[2] += bwt_end - bwt_beg;
 
 		bwt_beg = forward_sst->bwt_calls + backward_sst->bwt_calls;
 		stamp = __rdtsc();
@@ -663,7 +675,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 			for (int j = 0; j < read.length(); ) {
 				if (read[j] < 4) {
 					bwtintv_t m;
-					j = tem_forward_sst((const uint8_t*) read.c_str(), read.length(), j, mem_opt->min_seed_len, mem_opt->max_mem_intv, &m);
+					j = tem_forward_sst((const uint8_t*) read.c_str(), read.length(), j, mem_opt->min_seed_len, mem_opt->max_mem_intv, &m, aux);
 					if (m.x[2] > 0) smems.push_back(m);
 				} else {
 					j++;
@@ -672,7 +684,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		}
 		comp_time.third += __rdtsc() - stamp;
 		bwt_end = forward_sst->bwt_calls + backward_sst->bwt_calls;
-		comp_bwt_calls[3] += bwt_end - bwt_beg;
+		aux.comp_bwt_calls[3] += bwt_end - bwt_beg;
 		std::sort(smems.begin(), smems.end(), mem_cmp);
 	}
 
@@ -702,7 +714,7 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		const auto &p = unique_sal[i];
 		if (i == 0 or unique_sal[i-1].hit_location != p.hit_location) {
 			coordinate = bwt_sa(bwa_idx->bwt, p.hit_location);
-			comp_sal++;
+			aux.comp_sal++;
 		}
 		auto &s = batch_seed[p.read_id][p.array_id];
 		s.rbeg = coordinate;
@@ -733,17 +745,21 @@ void BWA_seeding::test_a_batch(const std::vector<long> &offset, std::vector<std:
 		for (auto &m : mem) {
 			perfect_match |= (mem_len(m) == read_length) ;
 		}
-		full_read_match += perfect_match;
+		aux.full_read_match += perfect_match;
 	}
-
-	fprintf(stderr, "Batch %d pass BWA(%.3f) COMP(%.3f) Gain(%.2f)\n",
-		 ++batch_id,
-		 1.0 * bwa_time.total / cpu_frequency,
-		 1.0 * comp_time.total / cpu_frequency,
-		 1.0 * comp_time.total / bwa_time.total);
 }
 
 void BWA_seeding::display_profile() {
+	thread_aux_t total;
+	for (int i = 0; i < threads_n; i++) total += thr_aux[i];
+	const auto &bwa_time = total.bwa_time;
+	const auto &comp_time = total.comp_time;
+	const auto *bwa_bwt_calls = total.bwa_bwt_calls;
+	const auto *comp_bwt_calls = total.comp_bwt_calls;
+	auto full_read_match = total.full_read_match;
+	auto shortcut = total.shortcut;
+	auto comp_sal = total.comp_sal, bwa_sal = total.bwa_sal;
+	auto bwa_bwt_ticks = total.bwa_bwt_ticks;
 	fprintf(stderr, "Input %d reads in total\n", total_reads_count);
 	fprintf(stderr, "Overall BWA\tCOMP\tGAIN\n");
 	fprintf(stderr, "  Total %.2f\t%.2f\t%.2f\n", __time(bwa_time.total), __time(comp_time.total), 1.0 * comp_time.total / bwa_time.total);
@@ -760,88 +776,7 @@ void BWA_seeding::display_profile() {
 	        1.0 * (comp_bwt_calls[1] + comp_bwt_calls[2] + comp_bwt_calls[3]) / (bwa_bwt_calls[1] + bwa_bwt_calls[2] + bwa_bwt_calls[3]),
 	        1.0 * comp_sal / bwa_sal);
 	fprintf(stderr, "Wasted Comp BWT:    %.2f\n", 100.0 * comp_bwt_calls[4] / comp_bwt_calls[1]);
-	fprintf(stderr, "Comp BWT percentage %.2f\n", 100.0 * (forward_sst->bwt_ticks + backward_sst->bwt_ticks) / (comp_time.total - comp_time.sal));
 	fprintf(stderr, "BWA  BWT percentage %.2f\n", 100.0 * bwa_bwt_ticks / (bwa_time.total - bwa_time.sal));
-}
-
-void BWA_seeding::seeding_SE() {
-	std::vector<std::string> read_batch;
-	std::vector<long> offset;
-
-	// Decompressing HQ Reads
-	char *buffer = new char[read_length * 2]; memset(buffer, 0, read_length * 2);
-	long curr_position = 0, curr_mis_cnt = 0;
-	forward_sst = new SST(bwa_idx->bwt);
-	backward_sst = new SST(bwa_idx->bwt);
-	mem_aux = smem_aux_init();
-	mem_opt = mem_opt_init();
-
-	for (int i = 0; i < hq_reads_list->reads_count; i++) {
-		curr_position += hq_reads_list->off[i];
-		memcpy(buffer, (hq_pg.data() + curr_position), hq_reads_list->read_length);
-		if (hq_reads_list->rev_comp[i]) {
-			rev_comp_in_place(buffer, hq_reads_list->read_length);
-		}
-		for (uint8_t j = 0; j < hq_reads_list->mis_cnt[i]; j++) {
-			uint8_t mis_pos = hq_reads_list->mis_off[curr_mis_cnt];
-			uint8_t mis_code = hq_reads_list->mis_sym_code[curr_mis_cnt];
-			buffer[mis_pos] = code_to_mismatch(buffer[mis_pos], mis_code);
-			curr_mis_cnt++;
-		}
-
-		// Reverse-complement it temporarily
-		if (hq_reads_list->rev_comp[i]) {
-			rev_comp_in_place(buffer, hq_reads_list->read_length);
-		}
-		// Output strand-corrected reads and shifted distance between consecutive reads
-		read_batch.emplace_back(std::string(buffer));
-		offset.push_back(curr_position);
-		if (read_batch.size() >= COMP_BATCH_SIZE or i == hq_reads_list->reads_count - 1) {
-			test_a_batch(offset, read_batch);
-			read_batch.clear();
-			offset.clear();
-		}
-		if (batch_id > 3000) break;
-	}
-	display_profile();
-	exit(EXIT_SUCCESS);
-
-
-
-	// Restoring LQ reads
-	curr_position = 0;
-	for (int i = 0; i < lq_reads_list->reads_count; i++) {
-		curr_position += lq_reads_list->off[i];
-		memcpy(buffer, (lq_pg.data() + curr_position), lq_reads_list->read_length);
-		read_batch.emplace_back(std::string(buffer));
-		offset.push_back(curr_position);
-		if (read_batch.size() >= COMP_BATCH_SIZE or i == lq_reads_list->reads_count - 1) {
-			test_a_batch(offset, read_batch);
-			read_batch.clear();
-			offset.clear();
-		}
-	}
-
-	// Restoring N reads
-	curr_position = 0;
-	for (int i = 0; i < n_reads_list->reads_count; i++) {
-		curr_position += n_reads_list->off[i];
-		memcpy(buffer, (n_pg.data() + curr_position), n_reads_list->read_length);
-		read_batch.emplace_back(std::string(buffer));
-		offset.push_back(curr_position);
-		if (read_batch.size() >= COMP_BATCH_SIZE or i == n_reads_list->reads_count - 1) {
-			test_a_batch(offset, read_batch);
-			read_batch.clear();
-			offset.clear();
-		}
-	}
-	display_profile();
-
-	free(mem_opt);
-	delete [] buffer;
-	delete forward_sst;
-	delete backward_sst;
-	smem_aux_destroy(mem_aux);
 }
 
 void BWA_seeding::compressive_seeding() {
@@ -897,10 +832,28 @@ void BWA_seeding::compressive_seeding() {
 		else apply_rc_pair_to_pg(pos_pg_64);
 	}
 
-	if (pgrc_mode == PGRC_SE_MODE) seeding_SE();
+//	if (pgrc_mode == PGRC_SE_MODE) seeding_SE();
 
 	fprintf(stderr, "Decompressed %d reads in total\n", total_reads_count);
 	in.close();
+}
+
+void BWA_seeding::seeding_with_thread(int batch_id, int tid) {
+	std::vector<std::string> batch;
+	std::vector<long> offset;
+	int start = batch_id * BATCH_SIZE, end = std::min((batch_id + 1) * BATCH_SIZE, (int)all_batch.size());
+	assert(start < all_batch.size() and end <= all_batch.size());
+	for (int i = start; i < end; i++) {
+		batch.push_back(all_batch[i]);
+		offset.push_back(all_offset[i]);
+	}
+	test_a_batch(offset, batch, thr_aux[tid]);
+}
+
+void thread_worker(void *data, long batch_id, int tid) {
+	fprintf(stderr, "Thread %d working with batch %ld\n", tid, batch_id);
+	auto *owner = (BWA_seeding*)data;
+	owner->seeding_with_thread(batch_id, tid);
 }
 
 void BWA_seeding::on_dec_reads(const char *fn) {
@@ -921,37 +874,45 @@ void BWA_seeding::on_dec_reads(const char *fn) {
 
 	uint64_t stamp = __rdtsc(); sleep(1); cpu_frequency = __rdtsc() - stamp;
 
+	// Prepare for thread auxiliary
+	thr_aux = new thread_aux_t[threads_n];
+	for (int i = 0; i < threads_n; i++) {
+		auto &a = thr_aux[i];
+		a.forward_sst = new SST(bwa_idx->bwt);
+		a.backward_sst = new SST(bwa_idx->bwt);
+		a.mem_aux = smem_aux_init();
+	}
+
 	fprintf(stderr, "Input test data with strand-corrected reads and overlapping information\n");
 	std::ifstream in(fn); assert(in.is_open());
-	std::vector<std::string> read_batch;
-	std::vector<long> offset;
 	char *buffer = new char[1024]; memset(buffer, 0, 1024 * sizeof(char));
-	long off, curr_position = 0, curr_mis_cnt = 0;
-	forward_sst = new SST(bwa_idx->bwt);
-	backward_sst = new SST(bwa_idx->bwt);
-	mem_aux = smem_aux_init();
+	long off, curr_position = 0;
 	while (in >> buffer >> off) {
 		curr_position += off;
-		read_batch.emplace_back(std::string(buffer));
-		offset.push_back(curr_position);
+		all_batch.emplace_back(std::string(buffer));
+		all_offset.push_back(curr_position);
 		read_length = (int)strlen(buffer);
 		hq_reads_count++;
 		total_reads_count++;
-		if (read_batch.size() >= COMP_BATCH_SIZE or in.eof()) {
-			test_a_batch(offset, read_batch);
-			read_batch.clear();
-			offset.clear();
+		if (all_batch.size() >= BATCH_SIZE * threads_n * 10 or in.eof()) {
+			kt_for(threads_n, thread_worker, this, std::max(1UL, all_batch.size() / BATCH_SIZE));
+			all_batch.clear();
+			all_offset.clear();
 		}
-		if (batch_id > 5000) break;
+		if (total_reads_count > 3000 * BATCH_SIZE) break;
 	}
 	display_profile();
 
 	free(mem_opt);
+	for (int i = 0; i < threads_n; i++) {
+		auto &a = thr_aux[i];
+		delete a.forward_sst;
+		delete a.backward_sst;
+		smem_aux_destroy(a.mem_aux);
+	}
+	delete [] thr_aux;
 	in.close();
 	delete [] buffer;
-	delete forward_sst;
-	delete backward_sst;
-	smem_aux_destroy(mem_aux);
 }
 
 int main(int argc, char *argv[]) {

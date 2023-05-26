@@ -95,8 +95,6 @@ public:
 
 	long bwt_calls = 0;
 	uint64_t bwt_ticks = 0;
-	uint64_t query_ticks = 0;
-
 
 	/** At parent node with prefix p, query child node for p + base.
 	 * If the child node does not exist, query it from FMD-index. */
@@ -196,23 +194,16 @@ inline int SST::add_empty_child(int parent, uint8_t base) {
 	return nodes[parent].children[base];
 }
 
-struct thread_aux_t {
-	std::vector<bwtintv_t> prev_intv, curr_intv; // Buffer for forward search LEP and backward extension
-	std::vector<int> prev_node, curr_node; // Buffer for SST node indexes
-	std::vector<bwtintv_t> mem; // Storing all SMEMs
-//	std::vector<bwtintv_t> ans; // Storing all SMEMs with length >= minimal seed length
-};
-
 struct time_rec_t {
 	uint64_t seeding, reseed, third, sal, total;
 	time_rec_t():seeding(0), reseed(0), third(0), sal(0), total(0) {}
-};
-
-struct Reseed_Item {
-	int read_id, pivot;
-	long min_hits;
-	Reseed_Item(int r, int p, long m): read_id(r), pivot(p), min_hits(m) {}
-	bool operator < (const Reseed_Item &item) const { return pivot > item.pivot; }
+	void operator += (const time_rec_t &t) {
+		seeding += t.seeding;
+		reseed += t.reseed;
+		third += t.third;
+		sal += t.sal;
+		total += t.total;
+	}
 };
 
 typedef struct {
@@ -227,6 +218,47 @@ struct SAL_Packed {
 	SAL_Packed(uint64_t h, uint32_t r, uint32_t a): hit_location(h), read_id(r), array_id(a) {}
 	bool operator < (const SAL_Packed &a) const {
 		return this->hit_location < a.hit_location;
+	}
+};
+
+#define BATCH_SIZE 1024
+
+struct thread_aux_t {
+	SST *forward_sst = nullptr; // Forward SST caching BWT forward extension
+	SST *backward_sst = nullptr; // Backward SST caching BWT backward extension
+	std::vector<bwtintv_t> prev_intv, curr_intv; // Buffer for forward search LEP and backward extension
+	std::vector<int> prev_node, curr_node; // Buffer for SST node indexes
+	std::vector<bwtintv_t> mem; // Storing all SMEMs but minimal seed length not considered
+	std::vector<bwtintv_t> batch_mem[BATCH_SIZE]; // Exact matches for each read
+	std::vector<mem_seed_t> batch_seed[BATCH_SIZE]; // Seeds for each read
+	std::vector<SAL_Packed> unique_sal; // Sorted suffix array hit locations for merging SAL operations
+
+	std::vector<bwtintv_t> truth_mem[BATCH_SIZE]; // Ground truth provided by BWA-MEM
+	std::vector<mem_seed_t> truth_seed[BATCH_SIZE];
+	smem_aux_t *mem_aux = nullptr;
+
+	// Profiling time cost and calls number for BWT extension and SAL
+	time_rec_t bwa_time, comp_time;
+	long comp_bwt_calls[16] = {0};
+	long bwa_bwt_calls[16] = {0};
+	long comp_sal = 0, bwa_sal = 0;
+	uint64_t bwa_bwt_ticks = 0;
+	long global_bwa_bwt = 0;
+	int full_read_match = 0; // #Reads are full-length matched
+	int shortcut = 0; // #Reads that are full-length matched and avoid regular SMEM search
+
+	void operator += (const thread_aux_t &a) {
+		bwa_time += a.bwa_time;
+		comp_time += a.comp_time;
+		for (int i = 0; i < 16; i++) {
+			bwa_bwt_calls[i] += a.bwa_bwt_calls[i];
+			comp_bwt_calls[i] += a.comp_bwt_calls[i];
+		}
+		comp_sal += a.comp_sal; bwa_sal += a.bwa_sal;
+		bwa_bwt_ticks += a.bwa_bwt_ticks;
+		global_bwa_bwt += a.global_bwa_bwt;
+		full_read_match += a.full_read_match;
+		shortcut += a.shortcut;
 	}
 };
 
@@ -265,36 +297,15 @@ private:
 	// ...
 	// org_idx[n] is PG position of the n read in FASTQ
 
-	const size_t CHUNK_SIZE_IN_BYTES = 100000; // 100KB
-
 	bwaidx_t *bwa_idx = nullptr;
 	mem_opt_t *mem_opt = nullptr;
-	smem_aux_t *mem_aux = nullptr;
-	thread_aux_t thr_aux;
+	thread_aux_t *thr_aux = nullptr;
 
-	const int COMP_BATCH_SIZE = 1024; // Process 1024 sorted reads at a time
-	int batch_id = 0;
-	int full_read_match = 0; // How many reads are exactly matched in full length
-	int shortcut = 0;
+	int threads_n = 1;
+	std::vector<std::string> all_batch; // Storing 10*threads batches
+	std::vector<long> all_offset; // Storing all offset values
 
-	SST *forward_sst = nullptr;
-	SST *backward_sst = nullptr;
-	std::vector<bwtintv_t> batch_mem[1024];
-	std::vector<bwtintv_t> truth_mem[1024];
-	std::vector<bwtintv_t> merge_mem;
-	std::vector<uint64_t> unique_seed;
-	std::vector<SAL_Packed> unique_sal;
-	std::vector<mem_seed_t> batch_seed[1024];
-	std::vector<mem_seed_t> truth_seed[1024];
-
-	time_rec_t bwa_time, comp_time;
-	long comp_bwt_calls[16] = {0};
-	long bwa_bwt_calls[16] = {0};
-	long comp_sal = 0, bwa_sal = 0;
 	uint64_t cpu_frequency = 1;
-	uint64_t bwa_bwt_ticks = 0;
-	long global_bwa_bwt = 0;
-
 	inline double __time(uint64_t x) { return 1.0 * x / cpu_frequency; }
 
 public:
@@ -309,21 +320,23 @@ public:
 
 	void set_index_name(const char *fn) { this->index_name = fn; }
 
-	int super_mem1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_intv, uint64_t max_intv, bwtintv_v *mem, bwtintv_v *tmpvec[2]);
+	int super_mem1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_intv, uint64_t max_intv, bwtintv_v *mem, bwtintv_v *tmpvec[2], thread_aux_t &aux);
 
-	int seed_strategy1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_len, int max_intv, bwtintv_t *mem);
+	int seed_strategy1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_len, int max_intv, bwtintv_t *mem, thread_aux_t &aux);
 
-	void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a);
+	void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a, thread_aux_t &aux);
 
 	int collect_smem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux_t &aux);
 
-	int tem_forward_sst(const uint8_t *seq, int len, int start, int min_len, int max_intv, bwtintv_t *mem);
+	int tem_forward_sst(const uint8_t *seq, int len, int start, int min_len, int max_intv, bwtintv_t *mem, thread_aux_t &aux);
 
-	void test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch);
+	void test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch, thread_aux_t &aux);
+
+	void seeding_with_thread(int batch_id, int tid);
 
 	void display_profile();
 
-	void seeding_SE();
+//	void seeding_SE();
 
 	void on_dec_reads(const char *fn);
 };
