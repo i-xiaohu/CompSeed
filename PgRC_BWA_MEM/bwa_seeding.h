@@ -311,20 +311,16 @@ private:
 public:
 	void set_archive_name(const char *fn) { this->archive_name = fn; }
 
+	void set_index_name(const char *fn) { this->index_name = fn; }
+
+	void set_threads(int n) { this->threads_n = n; }
+
 	void load_all_PGs(std::ifstream &in);
 
 	template<typename uint_pg_len>
 	void apply_rc_pair_to_pg(std::vector<uint_pg_len> &pg_pos);
 
 	void compressive_seeding();
-
-	void set_index_name(const char *fn) { this->index_name = fn; }
-
-	int super_mem1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_intv, uint64_t max_intv, bwtintv_v *mem, bwtintv_v *tmpvec[2], thread_aux_t &aux);
-
-	int seed_strategy1(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_len, int max_intv, bwtintv_t *mem, thread_aux_t &aux);
-
-	void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a, thread_aux_t &aux);
 
 	int collect_smem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux_t &aux);
 
