@@ -2,7 +2,7 @@
 // Created by ixiaohu on 2023/5/6.
 //
 
-#include "bwa_seeding.h"
+#include "comp_seeding.h"
 
 #include <cstring>
 #include <cassert>

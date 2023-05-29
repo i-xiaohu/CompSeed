@@ -2,8 +2,8 @@
 // Created by ixiaohu on 2023/5/6.
 //
 
-#ifndef PGRC_LEARN_BWA_SEEDING_H
-#define PGRC_LEARN_BWA_SEEDING_H
+#ifndef PGRC_LEARN_COMP_SEEDING_H
+#define PGRC_LEARN_COMP_SEEDING_H
 
 #include <string>
 #include <vector>
@@ -337,4 +337,4 @@ public:
 	void on_dec_reads(const char *fn);
 };
 
-#endif //PGRC_LEARN_BWA_SEEDING_H
+#endif //PGRC_LEARN_COMP_SEEDING_H
