@@ -262,7 +262,7 @@ struct thread_aux_t {
 	}
 };
 
-class BWA_seeding {
+class CompSeeding {
 private:
 	std::string archive_name;
 	std::string index_name;
@@ -335,6 +335,11 @@ public:
 //	void seeding_SE();
 
 	void on_dec_reads(const char *fn);
+
+	// BWA-MEM seeding
+	smem_aux_t **mem_aux;
+	void seeding_one_read(int seq_id, int tid);
+	void bwa_seeding(const char *fn);
 };
 
 #endif //PGRC_LEARN_COMP_SEEDING_H
