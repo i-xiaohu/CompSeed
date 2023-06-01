@@ -10,6 +10,7 @@
 #include "../PseudoGenome/SeparatedPG.h"
 #include "../bwalib/bwa.h"
 #include "../cstl/kvec.h"
+#include "bwamem.h"
 
 static const char PGRC_SE_MODE = 0; // reordered Singled End
 static const char PGRC_PE_MODE = 1; // reordered Paired End
@@ -42,40 +43,6 @@ static inline unsigned long long __rdtsc(void)
 typedef struct {
 	bwtintv_v mem, mem1, *tmpv[2];
 } smem_aux_t;
-
-typedef struct {
-	int a, b;               // match score and mismatch penalty
-	int o_del, e_del;
-	int o_ins, e_ins;
-	int pen_unpaired;       // phred-scaled penalty for unpaired reads
-	int pen_clip5,pen_clip3;// clipping penalty. This score is not deducted from the DP score.
-	int w;                  // band width
-	int zdrop;              // Z-dropoff
-
-	uint64_t max_mem_intv;
-
-	int T;                  // output score threshold; only affecting output
-	int flag;               // see MEM_F_* macros
-	int min_seed_len;       // minimum seed length
-	int min_chain_weight;
-	int max_chain_extend;
-	float split_factor;     // split into a seed if MEM is longer than min_seed_len*split_factor
-	int split_width;        // split into a seed if its occurence is smaller than this value
-	int max_occ;            // skip a seed if its occurence is larger than this value
-	int max_chain_gap;      // do not chain seed if it is max_chain_gap-bp away from the closest seed
-	int n_threads;          // number of threads
-	int chunk_size;         // process chunk_size-bp sequences in a batch
-	float mask_level;       // regard a hit as redundant if the overlap with another better hit is over mask_level times the min length of the two hits
-	float drop_ratio;       // drop a chain if its seed coverage is below drop_ratio times the seed coverage of a better chain overlapping with the small chain
-	float XA_drop_ratio;    // when counting hits for the XA tag, ignore alignments with score < XA_drop_ratio * max_score; only effective for the XA tag
-	float mask_level_redun;
-	float mapQ_coef_len;
-	int mapQ_coef_fac;
-	int max_ins;            // when estimating insert size distribution, skip pairs with insert longer than this value
-	int max_matesw;         // perform maximally max_matesw rounds of mate-SW for each end
-	int max_XA_hits, max_XA_hits_alt; // if there are max_hits or fewer, output them all
-	int8_t mat[25];         // scoring matrix; mat[0] == 0 if unset
-} mem_opt_t;
 
 /** SMEM Search Tree (SST) Node */
 struct SST_Node_t {
@@ -221,7 +188,7 @@ struct SAL_Packed {
 	}
 };
 
-#define BATCH_SIZE 1024
+#define BATCH_SIZE 512
 
 struct thread_aux_t {
 	SST *forward_sst = nullptr; // Forward SST caching BWT forward extension
@@ -298,12 +265,20 @@ private:
 	// org_idx[n] is PG position of the n read in FASTQ
 
 	bwaidx_t *bwa_idx = nullptr;
-	mem_opt_t *mem_opt = nullptr;
+	bntseq_t *bns = nullptr;
+	bwt_t *bwt = nullptr;
+	uint8_t *pac = nullptr;
+	mem_opt_t *opt = nullptr;
 	thread_aux_t *thr_aux = nullptr;
 
+
+	int chunk_size = 5 * 1000 * 1000;
 	int threads_n = 1;
 	std::vector<std::string> all_batch; // Storing 10*threads batches
 	std::vector<long> all_offset; // Storing all offset values
+	std::vector<mem_alnreg_v> all_regs;
+	std::vector<std::string> all_sam; // Storing alignment results in SAM format
+	int n_processed = 0;
 
 	uint64_t cpu_frequency = 1;
 	inline double __time(uint64_t x) { return 1.0 * x / cpu_frequency; }
@@ -326,9 +301,11 @@ public:
 
 	int tem_forward_sst(const uint8_t *seq, int len, int start, int min_len, int max_intv, bwtintv_t *mem, thread_aux_t &aux);
 
-	void test_a_batch(const std::vector<long> &offset, std::vector<std::string> &batch, thread_aux_t &aux);
+	void test_a_batch(int base, const std::vector<long> &offset, std::vector<std::string> &batch, thread_aux_t &aux);
 
-	void seeding_with_thread(int batch_id, int tid);
+	void seed_and_extend(int batch_id, int tid);
+
+	void generate_sam(int seq_id);
 
 	void display_profile();
 
@@ -340,6 +317,8 @@ public:
 	smem_aux_t **mem_aux;
 	void seeding_one_read(int seq_id, int tid);
 	void bwa_seeding(const char *fn);
+	void bwamem_core_wrapper(int seq_id, int tid);
+	void bwamem(const char *fn);
 };
 
 #endif //PGRC_LEARN_COMP_SEEDING_H
