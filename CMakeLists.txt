@@ -2,9 +2,8 @@ cmake_minimum_required(VERSION 3.10)
 project(pgrc_learn)
 
 set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O3")
 set(EXE "PBM")
-
 
 set(LZMA
         Utils/LzmaLib.cpp Utils/LzmaLib.h
@@ -62,18 +61,16 @@ set(bwalib
         bwalib/ksw.c bwalib/ksw.h
         bwalib/utils.c bwalib/utils.h)
 
-add_executable(bwa_index
-        ${FM_index}
-        ${bwalib}
-        FM_index/index_main.c)
-target_link_libraries(bwa_index -lz -lrt)
+set(BWA_Package ${cstl} ${FM_index} ${bwalib})
+add_executable(bwaidx ${BWA_Package} FM_index/index_main.c)
+target_link_libraries(bwaidx -lz -lrt -lpthread)
 
-add_executable(${EXE}
-        ${LZMA}
-        ${Matcher}
-        ${PseudoGenome}
-        ${ReadsSet}
-        ${Utils}
-        manager.cpp manager.h
-        main.cpp)
-target_link_libraries(${EXE} -lpthread)
+set(PgRC_Package ${LZMA} ${Matcher} ${PseudoGenome} ${ReadsSet} ${Utils})
+add_executable(pgrc_dec ${PgRC_Package} manager.cpp manager.h main.cpp)
+target_link_libraries(pgrc_dec -lpthread)
+
+add_executable(${EXE} ${BWA_Package} ${PgRC_Package}
+        PgRC_BWA_MEM/comp_seeding.cpp PgRC_BWA_MEM/comp_seeding.h
+        PgRC_BWA_MEM/bwamem.h PgRC_BWA_MEM/bwamem.c
+        PgRC_BWA_MEM/bwamem_extra.c PgRC_BWA_MEM/bwamem_pair.c)
+target_link_libraries(${EXE} -lm -lz -lrt -lpthread)
