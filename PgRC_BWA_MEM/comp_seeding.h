@@ -272,6 +272,7 @@ private:
 	thread_aux_t *thr_aux = nullptr;
 
 
+	int big_data_round_limit = 20;
 	int chunk_size = 5 * 1000 * 1000;
 	int threads_n = 1;
 	std::vector<std::string> all_batch; // Storing 10*threads batches
@@ -314,10 +315,6 @@ public:
 	void on_dec_reads(const char *fn);
 
 	// BWA-MEM seeding
-	smem_aux_t **mem_aux;
-	void seeding_one_read(int seq_id, int tid);
-	void bwa_seeding(const char *fn);
-	void bwamem_core_wrapper(int seq_id, int tid);
 	void bwamem(const char *fn);
 };
 

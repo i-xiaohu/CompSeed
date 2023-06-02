@@ -410,6 +410,7 @@ mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 		mem_chain_t tmp, *lower, *upper;
 		int rid = s.rid, to_add = 0;
 		if (rid < 0) continue; // bridging multiple reference sequences or the forward-reverse boundary;
+		tmp.pos = s.rbeg;
 		if (kb_size(tree)) {
 			kb_intervalp(chn, tree, &tmp, &lower, &upper); // find the closest chain
 			if (!lower || !test_and_merge(opt, bns->l_pac, lower, &s, rid)) to_add = 1;
@@ -1041,7 +1042,8 @@ void CompSeeding::test_a_batch(int base, const std::vector<long> &offset, std::v
 	}
 
 	for (int batch_id = 0; batch_id < batch.size(); batch_id++) {
-		int l_seq = batch[batch_id].length();
+		assert(batch[batch_id].length() == read_length);
+		int l_seq = read_length;
 		const auto *seq = (const uint8_t*) batch[batch_id].c_str();
 
 		// Chaining seeds
@@ -1536,7 +1538,6 @@ void CompSeeding::on_dec_reads(const char *fn) {
 		auto &a = thr_aux[i];
 		a.forward_sst = new SST(bwa_idx->bwt);
 		a.backward_sst = new SST(bwa_idx->bwt);
-		a.mem_aux = smem_aux_init();
 	}
 
 	fprintf(stderr, "Input test data with strand-corrected reads and overlapping information\n");
@@ -1562,8 +1563,24 @@ void CompSeeding::on_dec_reads(const char *fn) {
 			kt_for(threads_n,
 		        [](void *d, long i, int t) -> void { ((CompSeeding*)d)->seed_and_extend(i, t); },
 		        this,
-		        std::max(1UL, all_batch.size() / BATCH_SIZE));
+		           (all_batch.size() + BATCH_SIZE - 1) / BATCH_SIZE);
 			phase1_cpu += cputime() - cpu_start; phase1_real += realtime() - real_start;
+
+			for (int i = 0; i < all_batch.size(); i++) {
+				const auto &regs = all_regs[i];
+//				fprintf(stdout, "Read %d has %ld aligned regions\n", i, regs.n);
+				for (int j = 0; j < regs.n; j++) {
+					const auto &a = regs.a[j];
+//					fwrite(&a, sizeof(a), 1, stdout);
+//					fprintf(stdout, "[%d, %d) ==> %d:[%ld, %ld)\n", a.qb, a.qe, a.rid, a.rb, a.re);
+//					fprintf(stdout, "score=%d, true_score=%d, sub=%d\n", a.score, a.truesc, a.sub);
+//					fprintf(stdout, "alt_sc=%d, csub=%d, sub_n=%d\n", a.alt_sc, a.csub, a.sub_n);
+//					fprintf(stdout, "bandwith=%d, seedcov=%d, seconday=%d\n", a.w, a.seedcov, a.secondary);
+//					fprintf(stdout, "secondary_all=%d, seedlen0=%d, n_cmp=%d\n", a.secondary_all, a.seedlen0, a.n_comp);
+//					fprintf(stdout, "is_alt=%d, frac=%.6f, hash=%ld\n", a.is_alt, a.frac_rep, a.hash);
+				}
+//				fprintf(stdout, "%s", all_sam[i].c_str());
+			}
 
 			// Phase 2: generate SAM from aligned regions
 			cpu_start = cputime(); real_start = realtime();
@@ -1573,15 +1590,6 @@ void CompSeeding::on_dec_reads(const char *fn) {
 				all_batch.size());
 			phase2_cpu += cputime() - cpu_start; phase2_real += realtime() - real_start;
 
-			for (int i = 0; i < all_batch.size(); i++) {
-				const auto &regs = all_regs[i];
-//				fprintf(stdout, "Reads %d has %ld aligned regions\n", i, regs.n);
-//				for (int j = 0; j < regs.n; j++) {
-//					const auto &a = regs.a[j];
-//					fprintf(stdout, "[%d, %d) ==> %d:[%ld, %ld)\n", a.qb, a.qe, a.rid, a.rb, a.re);
-//				}
-				fprintf(stdout, "%s", all_sam[i].c_str());
-			}
 
 			for (int i = 0; i < all_batch.size(); i++) free(all_regs[i].a);
 			all_regs.clear();
@@ -1594,7 +1602,7 @@ void CompSeeding::on_dec_reads(const char *fn) {
 			fprintf(stderr, "Seed and Extend: %d reads processed. CPU usage phase1 %.2f phase2 %.2f\n",
 			        total_reads_count, phase1_cpu / phase1_real, phase2_cpu / phase2_real);
 		}
-		if (round_n > 10) break;
+		if (round_n > big_data_round_limit) break;
 	}
 	display_profile();
 
@@ -1603,149 +1611,12 @@ void CompSeeding::on_dec_reads(const char *fn) {
 		auto &a = thr_aux[i];
 		delete a.forward_sst;
 		delete a.backward_sst;
-		smem_aux_destroy(a.mem_aux);
 	}
 	delete [] thr_aux;
 	in.close();
 	delete [] buffer;
 }
 
-/***************************
- * Collection SA invervals *
- ***************************/
-
-#include "../cstl/ksort.h"
-#define intv_lt(a, b) ((a).info < (b).info)
-KSORT_INIT(mem_intv, bwtintv_t, intv_lt)
-
-static void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a)
-{
-	int i, k, x = 0, old_n;
-	int start_width = 1;
-	int split_len = (int)(opt->min_seed_len * opt->split_factor + .499);
-	a->mem.n = 0;
-	// first pass: find all SMEMs
-	while (x < len) {
-		if (seq[x] < 4) {
-			x = bwt_smem1(bwt, len, seq, x, start_width, &a->mem1, a->tmpv);
-			for (i = 0; i < a->mem1.n; ++i) {
-				bwtintv_t *p = &a->mem1.a[i];
-				int slen = (uint32_t)p->info - (p->info>>32); // seed length
-				if (slen >= opt->min_seed_len)
-					kv_push(bwtintv_t, a->mem, *p);
-			}
-		} else ++x;
-	}
-	// second pass: find MEMs inside a long SMEM
-	old_n = a->mem.n;
-	for (k = 0; k < old_n; ++k) {
-		bwtintv_t *p = &a->mem.a[k];
-		int start = p->info>>32, end = (int32_t)p->info;
-		if (end - start < split_len || p->x[2] > opt->split_width) continue;
-		bwt_smem1(bwt, len, seq, (start + end)>>1, p->x[2]+1, &a->mem1, a->tmpv);
-		for (i = 0; i < a->mem1.n; ++i)
-			if ((uint32_t)a->mem1.a[i].info - (a->mem1.a[i].info>>32) >= opt->min_seed_len)
-				kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
-	}
-	// third pass: LAST-like
-	if (opt->max_mem_intv > 0) {
-		x = 0;
-		while (x < len) {
-			if (seq[x] < 4) {
-				if (1) {
-					bwtintv_t m;
-					x = bwt_seed_strategy1(bwt, len, seq, x, opt->min_seed_len, opt->max_mem_intv, &m);
-					if (m.x[2] > 0) kv_push(bwtintv_t, a->mem, m);
-				} else { // for now, we never come to this block which is slower
-					x = bwt_smem1a(bwt, len, seq, x, start_width, opt->max_mem_intv, &a->mem1, a->tmpv);
-					for (i = 0; i < a->mem1.n; ++i)
-						kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
-				}
-			} else ++x;
-		}
-	}
-	// sort
-	ks_introsort(mem_intv, a->mem.n, a->mem.a);
-}
-
-void CompSeeding::seeding_one_read(int seq_id, int tid) {
-	auto &read = all_batch[seq_id];
-	for (auto &c : read) c = c < 5 ?c :nst_nt4_table[c];
-	auto *a = mem_aux[tid];
-	mem_collect_intv(opt, bwa_idx->bwt, read.length(), (const uint8_t*) read.c_str(), a);
-	for (int i = 0; i < a->mem.n; ++i) {
-		bwtintv_t *p = &a->mem.a[i];
-		int step, count, slen = (uint32_t)p->info - (p->info>>32); // seed length
-		int64_t k;
-		step = p->x[2] > opt->max_occ ? p->x[2] / opt->max_occ : 1;
-		for (k = count = 0; k < p->x[2] && count < opt->max_occ; k += step, ++count) {
-			mem_seed_t s;
-			int rid, to_add = 0;
-			s.rbeg = bwt_sa(bwa_idx->bwt, p->x[0] + k); // this is the base coordinate in the forward-reverse reference
-			s.qbeg = p->info>>32;
-			s.score= s.len = slen;
-			rid = bns_intv2rid(bwa_idx->bns, s.rbeg, s.rbeg + s.len);
-		}
-	}
-}
-
-static void bwa_worker(void *data, long seq_id, int tid) {
-	// Seeding for one read
-	auto *owner = (CompSeeding*)data;
-	owner->seeding_one_read(seq_id, tid);
-}
-
-void CompSeeding::bwa_seeding(const char *fn) {
-	// Loading FM-index
-	bwa_idx = bwa_idx_load_from_shm(index_name.c_str());
-	if (bwa_idx == nullptr) {
-		bwa_idx = bwa_idx_load(index_name.c_str(), BWA_IDX_ALL);
-		if (bwa_idx == nullptr) {
-			fprintf(stderr, "Load the FM-index failed\n");
-			exit(EXIT_FAILURE);
-		} else {
-			fprintf(stderr, "Load the FM-index from disk\n");
-		}
-	} else {
-		fprintf(stderr, "Load the FM-index from shared memory\n");
-	}
-	opt = mem_opt_init();
-
-	uint64_t stamp = __rdtsc(); sleep(1); cpu_frequency = __rdtsc() - stamp;
-
-	// Prepare for thread auxiliary
-	mem_aux = new smem_aux_t*[threads_n];
-	for (int i = 0; i < threads_n; i++) mem_aux[i] = smem_aux_init();
-
-	fprintf(stderr, "Input test data with strand-corrected reads and overlapping information\n");
-	std::ifstream in(fn); assert(in.is_open());
-	char *buffer = new char[1024]; memset(buffer, 0, 1024 * sizeof(char));
-	long off, curr_position = 0, bytes = 0;
-	while (in >> buffer >> off) {
-		curr_position += off;
-		all_batch.emplace_back(std::string(buffer));
-		all_offset.push_back(curr_position);
-		read_length = (int)strlen(buffer);
-		bytes += read_length;
-		hq_reads_count++;
-		total_reads_count++;
-		if (bytes >= chunk_size * threads_n) {
-			kt_for(threads_n, bwa_worker, this, all_batch.size());
-			fprintf(stderr, "BWA-MEM seeding: %d reads processed\n", total_reads_count);
-			bytes = 0;
-			all_batch.clear();
-			all_offset.clear();
-		}
-	}
-
-	free(opt);
-	for (int i = 0; i < threads_n; i++) smem_aux_destroy(mem_aux[i]);
-	delete [] mem_aux;
-	in.close();
-	delete [] buffer;
-}
-
-#include "bwamem.h"
 void CompSeeding::bwamem(const char *fn) {
 	// Loading FM-index
 	bwa_idx = bwa_idx_load_from_shm(index_name.c_str());
@@ -1769,8 +1640,6 @@ void CompSeeding::bwamem(const char *fn) {
 	uint64_t stamp = __rdtsc(); sleep(1); cpu_frequency = __rdtsc() - stamp;
 
 	// Prepare for thread auxiliary
-	mem_aux = new smem_aux_t*[threads_n];
-	for (int i = 0; i < threads_n; i++) mem_aux[i] = smem_aux_init();
 
 	fprintf(stderr, "Input test data with strand-corrected reads and overlapping information\n");
 	std::ifstream in(fn); assert(in.is_open());
@@ -1809,7 +1678,7 @@ void CompSeeding::bwamem(const char *fn) {
 			}
 			free(seqs);
 
-			for (int i = 0; i < n; i++) fprintf(stdout, "%s", all_sam[i].c_str());
+//			for (int i = 0; i < n; i++) fprintf(stdout, "%s", all_sam[i].c_str());
 			all_sam.clear();
 
 			fprintf(stderr, "BWA-MEM: %d reads processed\n", total_reads_count);
@@ -1818,12 +1687,10 @@ void CompSeeding::bwamem(const char *fn) {
 			all_offset.clear();
 			round_n++;
 		}
-		if (round_n > 10) break;
+		if (round_n > big_data_round_limit) break;
 	}
 
 	free(opt);
-	for (int i = 0; i < threads_n; i++) smem_aux_destroy(mem_aux[i]);
-	delete [] mem_aux;
 	in.close();
 	delete [] buffer;
 }
