@@ -3,10 +3,33 @@
 //
 
 #include <cstdio>
+#include <string>
+#include <map>
 #include "cstl/kbtree.h"
 #include "PgRC_BWA_MEM/BTree.h"
 
 #define cmp(a, b) ((a) - (b))
+
+std::map<const kbnode_t*, int> node_pointer;
+
+int node_id(const kbnode_t *x) {
+	if (node_pointer.find(x) == node_pointer.end()) {
+		node_pointer[x] = node_pointer.size();
+	}
+	return node_pointer[x];
+}
+
+std::string node_str(const kbnode_t *x) {
+	char buf[1024] = {0};
+	char *p = buf;
+	p += sprintf(p, "[%d]%c(", node_id(x), x->is_internal ?'I' :'E');
+	for (int i = 0; i < x->n; i++) {
+		if (i > 0) p += sprintf(p, " ");
+		p += sprintf(p, "%d", __KB_KEY(int, x)[i]);
+	}
+	sprintf(p, ")");
+	return std::string(buf);
+}
 
 typedef struct {
 	kbnode_t *root;
@@ -26,6 +49,7 @@ kbtree_test_t *kb_init_test(int size) {
 	b->off_ptr = 4 + b->n * sizeof(int);
 	b->ilen = (4 + sizeof(void *) + b->n * (sizeof(void *) + sizeof(int)) + 3) >> 2 << 2;
 	b->elen = (b->off_ptr + 3) >> 2 << 2;
+	fprintf(stderr, "ilen = %d, elen = %d\n", b->ilen, b->elen);
 	b->root = (kbnode_t *) calloc(1, b->ilen);
 	++b->n_nodes;
 	return b;
@@ -93,6 +117,7 @@ static void __kb_split_test(kbtree_test_t *b, kbnode_t *x, int i, kbnode_t *y) {
 	memmove(((int *) ((char *) x + 4)) + i + 1, ((int *) ((char *) x + 4)) + i, sizeof(int) * (x->n - i));
 	((int *) ((char *) x + 4))[i] = ((int *) ((char *) y + 4))[b->t - 1];
 	++x->n;
+	fprintf(stderr, "x = %s, y = %s, z = %s\n", node_str(x).c_str(), node_str(y).c_str(), node_str(z).c_str());
 }
 static void __kb_putp_aux_test(kbtree_test_t *b, kbnode_t *x, const int *k) {
 	int i = x->n - 1;
@@ -102,13 +127,17 @@ static void __kb_putp_aux_test(kbtree_test_t *b, kbnode_t *x, const int *k) {
 			memmove(((int *) ((char *) x + 4)) + i + 2, ((int *) ((char *) x + 4)) + i + 1,
 			        (x->n - i - 1) * sizeof(int));
 		((int *) ((char *) x + 4))[i + 1] = *k;
-		++x->n;
+		++x->n; // Extern node is guaranteed to be not full
+		fprintf(stderr, "Put key %d into external node %s\n", *k, node_str(x).c_str());
 	}
 	else {
 		i = __kb_getp_aux_test(x, k, 0) + 1;
+		fprintf(stderr, "Position of key %d in node %s is %d, which points to %d\n",
+		  *k, node_str(x).c_str(), i, node_id(__KB_PTR(b, x)[i]));
 		if (((kbnode_t **) ((char *) x + b->off_ptr))[i]->n == 2 * b->t - 1) {
+			fprintf(stderr, "But node %s has been full\n", node_str(__KB_PTR(b, x)[i]).c_str());
 			__kb_split_test(b, x, i, ((kbnode_t **) ((char *) x + b->off_ptr))[i]);
-			if (((*k) - (((int *) ((char *) x + 4))[i])) > 0)++i;
+			if (((*k) - (((int *) ((char *) x + 4))[i])) > 0) ++i;
 		}
 		__kb_putp_aux_test(b, ((kbnode_t **) ((char *) x + b->off_ptr))[i], k);
 	}
@@ -118,6 +147,7 @@ static void kb_putp_test(kbtree_test_t *b, const int *k) {
 	++b->n_keys;
 	r = b->root;
 	if (r->n == 2 * b->t - 1) {
+		fprintf(stderr, "Root node %s has been full, split it into y and z\n", node_str(r).c_str());
 		++b->n_nodes;
 		s = (kbnode_t *) calloc(1, b->ilen);
 		b->root = s;
@@ -249,18 +279,44 @@ static int kb_delp_test(kbtree_test_t *b, const int *k) {
 }
 static inline int kb_del_test(kbtree_test_t *b, const int k) { return kb_delp_test(b, &k); }
 
+static void print_btree(const kbtree_test_t *b, const kbnode_t *r) {
+	if (r->is_internal == 0) { // External node; print keys only
+		fprintf(stdout, "external %d %d", node_id(r), r->n);
+		for (int i = 0; i < r->n; i++) {
+			fprintf(stdout, " %d", __KB_KEY(int, r)[i]);
+		}
+		fprintf(stdout, "\n");
+	} else {
+		fprintf(stdout, "internal %d %d", node_id(r), r->n);
+		for (int i = 0; i < r->n; i++) {
+			fprintf(stdout, " %d", __KB_KEY(int, r)[i]);
+		}
+		for (int i = 0; i <= r->n; i++) {
+			fprintf(stdout, " %d", node_id(__KB_PTR(b, r)[i]));
+		}
+		fprintf(stdout, "\n");
+
+		for (int i = 0; i <= r->n; i++) {
+			print_btree(b, __KB_PTR(b, r)[i]);
+		}
+	}
+}
 
 const int BLOCK = 1024;
 
 int main() {
 	kbtree_test_t *t = kb_init_test(64);
 	fprintf(stderr, "Internal nodes range: [%d,%d]\n", t->t, t->n);
-	int array[] = {1, 3, 7, 2, 18, 2, 65, 4, 9, 11, 13};
+	// An normal random array
+//	int array[] = {1, 3, 7, 2, 18, 2, 65, 4, 9, 11, 13};
+	// An extreme case: all same value
+	int array[] = {9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9};
+	for (auto key : array) fprintf(stderr, "%d ", key); fprintf(stderr, "\n");
 	for (auto key : array) {
 		kb_put_test(t, key);
 	}
-	// I believe that the new node becomes to root node, and it is set to be internal.
-	// split the old root to y and z, allocate a new root node x, to connect y and z.
-	// y and z contain the half keys of old root.
+	for (int i = 0; i < 50; i++) kb_put_test(t, 9);
+	print_btree(t, t->root);
+
 }
 
