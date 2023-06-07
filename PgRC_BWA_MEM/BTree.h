@@ -109,6 +109,21 @@ private:
 		return begin; // Value = k (maybe it is okay to return begin-1, too)
 	}
 
+	/** In practice, DFS is faster than stack-implemented */
+	inline void traverse_dfs(const node_t *x, std::vector<T> &ans) {
+		if (x->is_internal) {
+			for (int i = 0; i < x->n; i++) {
+				traverse_dfs(PTR(x)[i], ans);
+				ans.push_back(KEY(x)[i]);
+			}
+			traverse_dfs(PTR(x)[x->n], ans);
+		} else {
+			for (int i = 0; i < x->n; i++) {
+				ans.push_back(KEY(x)[i]);
+			}
+		}
+	}
+
 public:
 	BTree(int size, int(*cmp)(const T&, const T&)): cmp(cmp) { init(size); }
 	explicit BTree(int(*cmp)(const T&, const T&)): cmp(cmp) { init(DEFAULT_BLOCK_SIZE); }
@@ -165,7 +180,7 @@ public:
 		}
 	}
 
-	void traverse(std::vector<T> &ans) {
+	inline void traverse_stack(std::vector<T> &ans) {
 		ans.clear();
 		struct Item {
 			const node_t *x; // The visited node
@@ -199,6 +214,10 @@ public:
 		}
 	}
 
+	inline void traverse(std::vector<T> &ans) {
+		ans.clear();
+		traverse_dfs(root, ans);
+	}
 };
 
 #endif //PGRC_LEARN_BTREE_H
