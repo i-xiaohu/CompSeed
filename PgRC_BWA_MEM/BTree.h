@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <cassert>
 #include <stack>
+#include <map>
 
 template <class T>
 class BTree {
@@ -30,10 +31,10 @@ private:
 
 	/** Initialize a tree with the given block size for storing one node */
 	inline void init(int size) {
-		t = ((size - sizeof(node_t) - sizeof(T*)) / (sizeof(T*) + sizeof(T)) + 1) / 2;
+		t = ((size - sizeof(node_t) - sizeof(node_t*)) / (sizeof(node_t*) + sizeof(T)) + 1) / 2;
 		assert(t >= 2); // At least be order of 2
 		m = 2 * t - 1;
-		in_mem = (sizeof(node_t) + m * sizeof(T) + (m + 1) * sizeof(T*) + 3) / 4 * 4;
+		in_mem = (sizeof(node_t) + m * sizeof(T) + (m + 1) * sizeof(node_t*) + 3) / 4 * 4;
 		ex_mem = (sizeof(node_t) + m * sizeof(T) + 3) / 4 * 4;
 		off_ptr = sizeof(node_t) + m * sizeof(T);
 		root = (node_t*) calloc(1, in_mem);
@@ -47,16 +48,31 @@ private:
 	// Return pointer for elements
 	inline T* KEY(const node_t *s) { return ((T*)((char*)s + 4)); }
 
-	inline std::string node_str(const node_t *x) {
-		std::string ret;
-		ret += std::to_string(x->n);
-		ret += "(";
-		for (int i = 0; i < x->n; i++) {
-			if (i > 0) ret += " ";
-			ret += std::to_string(KEY(x)[i]);
+	/** For debug and print */
+	std::map<const node_t*, int> pointer_dict;
+
+	inline int node_id(const node_t *x) {
+		if (pointer_dict.find(x) == pointer_dict.end()) {
+			pointer_dict[x] = pointer_dict.size();
 		}
-		ret += ")";
-		return ret;
+		return pointer_dict[x];
+	}
+
+	inline std::string node_str(const node_t *x) {
+		char buf[1024]; char *p = buf;
+		p += sprintf(p, "n=%d, p=%d {", x->n, node_id(x));
+		if (x->is_internal) {
+			for (int i = 0; i < x->n; i++) {
+				p += sprintf(p, "%d < %d <", node_id(PTR(x)[i]), KEY(x)[i]);
+			}
+			p += sprintf(p, " %d", node_id(PTR(x)[x->n]));
+		} else {
+			for (int i = 0; i < x->n; i++) {
+				p += sprintf(p, "%s%d", i ? " " : "", KEY(x)[i]);
+			}
+		}
+		sprintf(p, "}");
+		return std::string(buf);
 	}
 
 	/** Split the node y which has the maximum 2t-1 keys.
@@ -125,12 +141,60 @@ public:
 	inline void print() {
 		std::stack<node_t*> st; st.push(root);
 		while (!st.empty()) {
-			auto x = st.top(); st.pop();
-			fprintf(stdout, "%s\n", node_str(x).c_str());
+			node_t *x = st.top(); st.pop();
 			if (x->is_internal !=  0) {
+				fprintf(stdout, "internal %d %d", node_id(x), x->n);
+				for (int i = 0; i < x->n; i++) {
+					fprintf(stdout, " %d", KEY(x)[i]);
+				}
+				for (int i = 0; i <= x->n; i++) {
+					fprintf(stdout, " %d", node_id(PTR(x)[i]));
+				}
+				fprintf(stdout, "\n");
+
 				for (int i = 0; i <= x->n; i++) {
 					st.push(PTR(x)[i]);
 				}
+			} else {
+				fprintf(stdout, "external %d %d", node_id(x), x->n);
+				for (int i = 0; i < x->n; i++) {
+					fprintf(stdout, " %d", KEY(x)[i]);
+				}
+				fprintf(stdout, "\n");
+			}
+		}
+	}
+
+	void traverse(std::vector<T> &ans) {
+		ans.clear();
+		struct Item {
+			const node_t *x; // The visited node
+			int child; // which child of x is being visited
+			Item(const node_t *x, int child): x(x), child(child) {}
+		};
+		std::stack<Item> st; st.push(Item(root, 0));
+		while (!st.empty()) {
+			auto item = st.top(); // Do not remove this node, which might have children
+			// Depth First Search along this child
+			while (item.x->is_internal != 0 and item.child <= item.x->n) {
+				const node_t *next = PTR(item.x)[item.child];
+				st.push(Item(next, 0));
+				item = st.top();
+			}
+			if (item.x->is_internal == 0) { // reach a leaf node
+				for (int i = 0; i < item.x->n; i++) {
+					ans.push_back(KEY(item.x)[i]);
+				}
+			} // else all children of the node has been visited
+
+			st.pop(); // Remove the processed node
+			if (!st.empty()) { // Move up to the parent node
+				auto parent = st.top(); st.pop();
+				if (parent.child < parent.x->n) {
+					ans.push_back(KEY(parent.x)[parent.child]);
+				}
+				parent.child++; // Move to next child
+				st.push(parent);
 			}
 		}
 	}
