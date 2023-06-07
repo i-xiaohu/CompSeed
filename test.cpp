@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <string>
 #include <map>
+#include <vector>
 #include "cstl/kbtree.h"
 #include "PgRC_BWA_MEM/BTree.h"
 
@@ -81,6 +82,7 @@ static int *kb_getp_test(kbtree_test_t *b, const int *k) {
 	return 0;
 }
 static inline int *kb_get_test(kbtree_test_t *b, const int k) { return kb_getp_test(b, &k); }
+
 static void kb_intervalp_test(kbtree_test_t *b, const int *k, int **lower, int **upper) {
 	int i, r = 0;
 	kbnode_t *x = b->root;
@@ -304,19 +306,79 @@ static void print_btree(const kbtree_test_t *b, const kbnode_t *r) {
 
 const int BLOCK = 1024;
 
+static void destroy(kbtree_test_t *t) {
+	if (t == nullptr) return;
+	int i, max = 8;
+	kbnode_t *x, **top, **stack = nullptr;
+	top = stack = (kbnode_t **) calloc(max, sizeof(kbnode_t *));
+	*top++ = (t)->root;
+	while (top != stack) {
+		x = *--top;
+		if (x == 0 || x->is_internal == 0) {
+			free(x);
+			continue;
+		}
+		for (i = 0; i <= x->n; ++i) {
+			if (((kbnode_t **) ((char *) x + t->off_ptr))[i]) {
+				if (top - stack == max) {
+					max <<= 1;
+					stack = (kbnode_t **) realloc(stack, max * sizeof(kbnode_t *));
+					top = stack + (max >> 1);
+				}
+				*top++ = ((kbnode_t **) ((char *) x + t->off_ptr))[i];
+			}
+		}
+		free(x);
+	}
+	free(t);
+	free(stack);
+}
+
+void traverse(const kbtree_test_t *t, std::vector<int> &sorted) {
+	int __kmax = 8;
+	__kbstack_t *__kstack, *__kp;
+	__kp = __kstack = (__kbstack_t *) calloc(__kmax, sizeof(__kbstack_t));
+	__kp->x = (t)->root;
+	__kp->i = 0;
+	for (;;) {
+		while (__kp->x && __kp->i <= __kp->x->n) {
+			if (__kp - __kstack == __kmax - 1) {
+				__kmax <<= 1;
+				__kstack = (__kbstack_t *) realloc(__kstack, __kmax * sizeof(__kbstack_t));
+				__kp = __kstack + (__kmax >> 1) - 1;
+			}
+			(__kp + 1)->i = 0;
+			(__kp + 1)->x = __kp->x->is_internal ? ((kbnode_t **) ((char *) __kp->x + t->off_ptr))[__kp->i] : 0;
+			++__kp;
+		}
+		--__kp;
+		if (__kp >= __kstack) {
+			if (__kp->x && __kp->i < __kp->x->n)
+				sorted.push_back(*(&((int *) ((char *) __kp->x + 4))[__kp->i]));
+			++__kp->i;
+		}
+		else break;
+	}
+	free(__kstack);
+}
+
 int main() {
 	kbtree_test_t *t = kb_init_test(64);
 	fprintf(stderr, "Internal nodes range: [%d,%d]\n", t->t, t->n);
 	// An normal random array
-//	int array[] = {1, 3, 7, 2, 18, 2, 65, 4, 9, 11, 13};
+	int array[] = {1, 3, 7, 2, 18, 2, 65, 4, 9, 11, 13};
 	// An extreme case: all same value
-	int array[] = {9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9};
+//	int array[] = {9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9};
 	for (auto key : array) fprintf(stderr, "%d ", key); fprintf(stderr, "\n");
 	for (auto key : array) {
 		kb_put_test(t, key);
 	}
-	for (int i = 0; i < 50; i++) kb_put_test(t, 9);
-	print_btree(t, t->root);
+//	print_btree(t, t->root);
 
+	std::vector<int> sorted;
+	traverse(t, sorted);
+	for (auto s : sorted) fprintf(stderr, "%d ", s); fprintf(stderr, "\n");
+
+	destroy(t);
 }
 
