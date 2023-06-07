@@ -110,18 +110,27 @@ private:
 	}
 
 	/** In practice, DFS is faster than stack-implemented */
-	inline void traverse_dfs(const node_t *x, std::vector<T> &ans) {
+	inline void traverse_recursion(const node_t *x, std::vector<T> &ans) {
 		if (x->is_internal) {
 			for (int i = 0; i < x->n; i++) {
-				traverse_dfs(PTR(x)[i], ans);
+				traverse_recursion(PTR(x)[i], ans);
 				ans.push_back(KEY(x)[i]);
 			}
-			traverse_dfs(PTR(x)[x->n], ans);
+			traverse_recursion(PTR(x)[x->n], ans);
 		} else {
 			for (int i = 0; i < x->n; i++) {
 				ans.push_back(KEY(x)[i]);
 			}
 		}
+	}
+
+	inline void destroy_recursion(node_t *x) {
+		if (x->is_internal) {
+			for (int i = 0; i <= x->n; i++) {
+				destroy_recursion(PTR(x)[i]);
+			}
+		}
+		free(x);
 	}
 
 public:
@@ -216,8 +225,10 @@ public:
 
 	inline void traverse(std::vector<T> &ans) {
 		ans.clear();
-		traverse_dfs(root, ans);
+		traverse_recursion(root, ans);
 	}
+
+	inline void destroy() { destroy_recursion(root); }
 };
 
 #endif //PGRC_LEARN_BTREE_H
