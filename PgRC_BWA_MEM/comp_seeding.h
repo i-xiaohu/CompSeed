@@ -11,6 +11,7 @@
 #include "../bwalib/bwa.h"
 #include "../cstl/kvec.h"
 #include "bwamem.h"
+#include "SST.h"
 
 static const char PGRC_SE_MODE = 0; // reordered Singled End
 static const char PGRC_PE_MODE = 1; // reordered Paired End
@@ -43,123 +44,6 @@ static inline unsigned long long __rdtsc(void)
 typedef struct {
 	bwtintv_v mem, mem1, *tmpv[2];
 } smem_aux_t;
-
-/** SMEM Search Tree (SST) Node */
-struct SST_Node_t {
-	bwtintv_t match; // SA interval in FMD-index
-	int children[4]; // Indexes of four children A,C,G,T
-	SST_Node_t() { children[0] = children[1] = children[2] = children[3] = -1; }
-};
-
-class SST {
-private:
-	std::vector<SST_Node_t> nodes;
-	const bwt_t *bwt;
-	bwtintv_t next[4];
-
-public:
-	explicit SST(const bwt_t *b);
-
-	long bwt_calls = 0;
-	uint64_t bwt_ticks = 0;
-
-	/** At parent node with prefix p, query child node for p + base.
-	 * If the child node does not exist, query it from FMD-index. */
-	int query_child(int parent, uint8_t base, bool is_back);
-
-	inline int query_forward_child(int parent, uint8_t base);
-
-	inline int query_backward_child(int parent, uint8_t base);
-
-	/** Add [pivot, LEP] to backward SST. */
-	inline int add_lep_child(int parent, uint8_t base, const uint64_t *x);
-
-	/** Add suffixes of [pivot + 1, LEP] to backward SST. But SA interval of
-	 * suffixes is unknown so {0,0,0} is used to mark such nodes in SST. */
-	inline int add_empty_child(int parent, uint8_t base);
-
-	inline bwtintv_t get_intv(int id) { return nodes[id].match; }
-
-	inline int get_child(int parent, uint8_t base) { return nodes[parent].children[base]; }
-
-	/** Only keep root and its four children */
-	inline void clear() {
-		nodes.resize(5);
-		for (int i = 1; i <= 4; i++) {
-			for (int &c : nodes[i].children) {
-				c = -1;
-			}
-		}
-	}
-};
-
-inline int SST::query_forward_child(int parent, uint8_t base) {
-	if (nodes[parent].children[base] == -1) {
-		uint64_t start = __rdtsc();
-		bwt_extend(bwt, &nodes[parent].match, next, 0);
-		bwt_ticks += __rdtsc() - start;
-		bwt_calls++;
-
-		SST_Node_t child;
-		child.match = next[base];
-		nodes[parent].children[base] = nodes.size();
-		nodes.push_back(child);
-	}
-	return nodes[parent].children[base];
-}
-
-inline int SST::query_backward_child(int parent, uint8_t base) {
-	if (nodes[parent].children[base] == -1) {
-		uint64_t start = __rdtsc();
-		bwt_extend(bwt, &nodes[parent].match, next, 1);
-		bwt_ticks += __rdtsc() - start;
-		bwt_calls++;
-
-		SST_Node_t child;
-		child.match = next[base];
-		nodes[parent].children[base] = nodes.size();
-		nodes.push_back(child);
-	}
-	auto &c = nodes[nodes[parent].children[base]];
-	// If find an empty node, BWT query is required
-	if (c.match.x[0] or c.match.x[1] or c.match.x[2]) {
-		return nodes[parent].children[base];
-	} else {
-		uint64_t start = __rdtsc();
-		bwt_extend(bwt, &nodes[parent].match, next, 1);
-		bwt_ticks += __rdtsc() - start;
-		bwt_calls++;
-		c.match = next[base];
-		return nodes[parent].children[base];
-	}
-}
-
-inline int SST::add_lep_child(int parent, uint8_t base, const uint64_t *x) {
-	if (nodes[parent].children[base] == -1) {
-		nodes[parent].children[base] = nodes.size();
-		SST_Node_t child;
-		child.match.x[0] = x[0];
-		child.match.x[1] = x[1];
-		child.match.x[2] = x[2];
-		nodes.push_back(child);
-	} else {
-		auto &c = nodes[nodes[parent].children[base]];
-		c.match.x[0] = x[0];
-		c.match.x[1] = x[1];
-		c.match.x[2] = x[2];
-	}
-	return nodes[parent].children[base];
-}
-
-inline int SST::add_empty_child(int parent, uint8_t base) {
-	if (nodes[parent].children[base] == -1) {
-		nodes[parent].children[base] = nodes.size();
-		SST_Node_t child;
-		child.match.x[0] = child.match.x[1] = child.match.x[2] = 0;
-		nodes.push_back(child);
-	} // else do nothing whatever the child node is empty or not
-	return nodes[parent].children[base];
-}
 
 struct time_rec_t {
 	uint64_t seeding, reseed, third, sal, total;
@@ -231,39 +115,6 @@ struct thread_aux_t {
 
 class CompSeeding {
 private:
-	std::string archive_name;
-	std::string index_name;
-	uint8_t compression_level = 2;
-	bool separate_N = true; // separate reads with N
-	bool single_end_mode = false;
-	bool preserve_order_mode = false;
-	bool rev_comp_pair = false; // The second read from a pair is reverse-complemented
-
-	ExtendReadsList *hq_reads_list = nullptr;
-	ExtendReadsList *lq_reads_list = nullptr;
-	ExtendReadsList *n_reads_list = nullptr;
-
-	int read_length;
-	int hq_reads_count;
-	int lq_reads_count;
-	int non_reads_count; // Non-N reads count
-	int n_reads_count;
-	int total_reads_count;
-
-	long hq_pg_length;
-	long non_pg_length; // Non-N PG length
-	std::string hq_pg;
-	std::string lq_pg;
-	std::string n_pg;
-
-	std::vector<int> paired_idx; // paired_idx[2i] and paired_idx[2i+1] store the indexes in PG for a pair of reads
-	bool joined_pg_len_std;
-	std::vector<uint32_t> pos_pg_32; // The position on PG of reads in original FASTQ order (32-bit)
-	std::vector<uint64_t> pos_pg_64; // The position on PG of reads in original FASTQ order (64-bit)
-	// org_idx[0] is PG position of the first read in FASTQ
-	// ...
-	// org_idx[n] is PG position of the n read in FASTQ
-
 	bwaidx_t *bwa_idx = nullptr;
 	bntseq_t *bns = nullptr;
 	bwt_t *bwt = nullptr;
@@ -271,8 +122,8 @@ private:
 	mem_opt_t *opt = nullptr;
 	thread_aux_t *thr_aux = nullptr;
 
-
-	int big_data_round_limit = 20;
+	int total_reads_count = 0;
+	int big_data_round_limit = 0;
 	int chunk_size = 5 * 1000 * 1000;
 	int threads_n = 1;
 	std::vector<std::string> all_batch; // Storing 10*threads batches
@@ -285,18 +136,11 @@ private:
 	inline double __time(uint64_t x) { return 1.0 * x / cpu_frequency; }
 
 public:
-	void set_archive_name(const char *fn) { this->archive_name = fn; }
+	CompSeeding();
 
-	void set_index_name(const char *fn) { this->index_name = fn; }
+	void load_index(const char *fn);
 
 	void set_threads(int n) { this->threads_n = n; }
-
-	void load_all_PGs(std::ifstream &in);
-
-	template<typename uint_pg_len>
-	void apply_rc_pair_to_pg(std::vector<uint_pg_len> &pg_pos);
-
-	void compressive_seeding();
 
 	int collect_smem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux_t &aux);
 
@@ -310,11 +154,8 @@ public:
 
 	void display_profile();
 
-//	void seeding_SE();
-
 	void on_dec_reads(const char *fn);
 
-	// BWA-MEM seeding
 	void bwamem(const char *fn);
 };
 

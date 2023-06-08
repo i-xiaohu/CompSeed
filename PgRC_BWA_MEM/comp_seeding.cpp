@@ -21,103 +21,6 @@
 #include "../cstl/kstring.h"
 #include "../bwalib/utils.h"
 
-void CompSeeding::load_all_PGs(std::ifstream &in) {
-	fprintf(stderr, "1. Decompressing HQ reads...\n");
-	PseudoGenomeHeader hq_pgh(in);
-	auto *hq_prop = new ReadsSetProperties(in);
-	assert(!confirm_text_read_mode(in));
-	hq_reads_list = load_extend_reads_list(
-			in,
-			hq_pgh.get_max_read_length(),
-			hq_pgh.get_reads_count(),
-			preserve_order_mode,
-			false,
-			false);
-	hq_reads_list->reads_count = hq_prop->reads_count;
-	hq_reads_list->read_length = hq_prop->max_read_length;
-
-	fprintf(stderr, "2. Decompressing LQ reads...\n");
-	PseudoGenomeHeader lq_pgh(in);
-	auto *lq_prop = new ReadsSetProperties(in);
-	assert(!confirm_text_read_mode(in));
-	lq_reads_list = load_extend_reads_list(
-			in,
-			lq_pgh.get_max_read_length(),
-			lq_pgh.get_reads_count(),
-			preserve_order_mode,
-			true,
-			true);
-	lq_reads_list->reads_count = lq_prop->reads_count;
-	lq_reads_list->read_length = lq_prop->max_read_length;
-
-	fprintf(stderr, "3. Decompressing N reads...\n");
-	PseudoGenomeHeader n_pgh;
-	ReadsSetProperties *n_prop = nullptr;
-	if (separate_N) {
-		n_pgh = PseudoGenomeHeader(in);
-		n_prop = new ReadsSetProperties(in);
-		assert(!confirm_text_read_mode(in));
-		n_reads_list = load_extend_reads_list(
-				in,
-				n_pgh.get_max_read_length(),
-				n_pgh.get_reads_count(),
-				preserve_order_mode,
-				true,
-				true);
-		n_reads_list->reads_count = n_prop->reads_count;
-		n_reads_list->read_length = n_prop->max_read_length;
-	}
-
-	read_length = hq_prop->max_read_length;
-	hq_reads_count = hq_prop->reads_count;
-	lq_reads_count = lq_prop->reads_count;
-	non_reads_count = hq_reads_count + lq_reads_count;
-	n_reads_count = n_prop ?n_prop->reads_count :0;
-	total_reads_count = non_reads_count + n_reads_count;
-
-	hq_pg_length = hq_pgh.get_pg_length();
-	non_pg_length = hq_pg_length + lq_pgh.get_pg_length();
-	if (preserve_order_mode) {
-		joined_pg_len_std = non_pg_length + n_pgh.get_pg_length() <= UINT32_MAX;
-		if (joined_pg_len_std) {
-			decompress_pg_position(in, pos_pg_32, total_reads_count, single_end_mode);
-		} else {
-			decompress_pg_position(in, pos_pg_64, total_reads_count, single_end_mode);
-		}
-	} else if (not single_end_mode) {
-		restore_paired_idx(in, paired_idx);
-	}
-
-	restore_all_matched_pg(in, hq_pg_length, hq_pg, lq_pg, n_pg);
-}
-
-template<typename uint_pg_len>
-void CompSeeding::apply_rc_pair_to_pg(std::vector<uint_pg_len> &pg_pos) {
-	if (preserve_order_mode) {
-		int hq_idx = 0;
-		const int pairs_count = total_reads_count / 2;
-		for (int i = 0; i < pairs_count; i++) {
-			uint_pg_len pos = pg_pos[i];
-			if (pos < hq_pg_length) hq_idx++;
-		}
-		for (int i = pairs_count; i < total_reads_count; i++) {
-			uint_pg_len pos = pg_pos[i];
-			if (pos < hq_pg_length) {
-				hq_reads_list->rev_comp[hq_idx] = !hq_reads_list->rev_comp[hq_idx];
-				hq_idx++;
-			}
-		}
-	} else {
-		// Reverse complement each read from file2
-		for (int i = 1; i < total_reads_count; i += 2) {
-			int idx = paired_idx[i];
-			if (idx < hq_reads_count) {
-				hq_reads_list->rev_comp[idx] = !hq_reads_list->rev_comp[idx];
-			}
-		}
-	}
-}
-
 smem_aux_t *smem_aux_init() {
 	smem_aux_t *a;
 	a = (smem_aux_t*) calloc(1, sizeof(smem_aux_t));
@@ -142,45 +45,6 @@ static void bwt_reverse_intvs(bwtintv_v *p) {
 			p->a[j] = tmp;
 		}
 	}
-}
-
-SST::SST(const bwt_t *b) {
-	bwt = b;
-	SST_Node_t root;
-	for (int i = 0; i < 4; i++) root.children[i] = i + 1;
-	nodes.push_back(root);
-
-	SST_Node_t child;
-	for (uint8_t c = 0; c < 4; c++) {
-		bwt_set_intv(bwt, c, child.match);
-		nodes.push_back(child);
-	}
-}
-
-int SST::query_child(int parent, uint8_t base, bool is_back) {
-	if (nodes[parent].children[base] == -1) {
-		uint64_t start = __rdtsc();
-		bwt_extend(bwt, &nodes[parent].match, next, is_back);
-		bwt_ticks += __rdtsc() - start;
-		bwt_calls++;
-
-		for (uint8_t c = 0; c < 4; c++) { // Is it necessary?
-			SST_Node_t child;
-			child.match = next[c];
-			nodes[parent].children[c] = nodes.size();
-			nodes.push_back(child);
-		}
-	}
-	auto &c = nodes[nodes[parent].children[base]];
-	// If find an empty node, BWT query is required
-	if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
-		uint64_t start = __rdtsc();
-		bwt_extend(bwt, &nodes[parent].match, next, is_back);
-		bwt_ticks += __rdtsc() - start;
-		bwt_calls++;
-		c.match = next[base];
-	}
-	return nodes[parent].children[base];
 }
 
 static bool check_mem(const bwt_t *bwt, const std::string &s, const bwtintv_t &ref) {
@@ -1042,8 +906,7 @@ void CompSeeding::test_a_batch(int base, const std::vector<long> &offset, std::v
 	}
 
 	for (int batch_id = 0; batch_id < batch.size(); batch_id++) {
-		assert(batch[batch_id].length() == read_length);
-		int l_seq = read_length;
+		int l_seq = batch[batch_id].length();
 		const auto *seq = (const uint8_t*) batch[batch_id].c_str();
 
 		// Chaining seeds
@@ -1088,65 +951,6 @@ void CompSeeding::display_profile() {
 	        (comp_bwt_calls[1] + comp_bwt_calls[2] + comp_bwt_calls[3]),
 	        comp_sal);
 	fprintf(stderr, "Wasted Comp BWT:    %.2f\n", 100.0 * comp_bwt_calls[4] / comp_bwt_calls[1]);
-}
-
-void CompSeeding::compressive_seeding() {
-	// Loading FM-index
-	bwa_idx = bwa_idx_load_from_shm(index_name.c_str());
-	if (bwa_idx == nullptr) {
-		bwa_idx = bwa_idx_load(index_name.c_str(), BWA_IDX_ALL);
-		if (bwa_idx == nullptr) {
-			fprintf(stderr, "Load the FM-index failed\n");
-			exit(EXIT_FAILURE);
-		} else {
-			fprintf(stderr, "Load the FM-index from disk\n");
-		}
-	} else {
-		fprintf(stderr, "Load the FM-index from shared memory\n");
-	}
-	uint64_t stamp = __rdtsc(); sleep(1); cpu_frequency = __rdtsc() - stamp;
-
-	std::ifstream in(archive_name); assert(in.is_open());
-	for (int i = 0; i < strlen(PGRC_HEADER); i++) assert(in.get() == PGRC_HEADER[i]);
-	char version_mode = in.get(); assert(version_mode == '#');
-	char version_major = in.get();
-	char version_minor = in.get();
-	char version_revision = in.get();
-	if (version_major != PGRC_VERSION_MAJOR or version_minor != PGRC_VERSION_MINOR) {
-		fprintf(stderr, "Archive is packed with a different version PgRC %d.%d\n",
-		        version_major, version_minor);
-		exit(EXIT_FAILURE);
-	}
-	compression_level = in.get();
-	char pgrc_mode = in.get();
-	if (pgrc_mode != PGRC_SE_MODE) {
-		fprintf(stderr, "PgRC-BWA-MEM now supports SE mode only\n");
-		exit(EXIT_FAILURE);
-	}
-	const std::string five_modes[] = {"SE", "PE", "SE_ORD", "PE_ORD"};
-	fprintf(stderr, "Compression mode: %s\n", five_modes[pgrc_mode].c_str());
-	separate_N = (bool) in.get();
-	if (pgrc_mode == PGRC_PE_MODE or pgrc_mode == PGRC_ORD_PE_MODE) {
-		rev_comp_pair = (bool) in.get();
-	}
-	std::string tmp_directory; in >> tmp_directory; tmp_directory += "/";
-	in.get();
-
-	preserve_order_mode = (pgrc_mode == PGRC_ORD_SE_MODE or pgrc_mode == PGRC_ORD_PE_MODE);
-	single_end_mode = (pgrc_mode == PGRC_SE_MODE or pgrc_mode == PGRC_ORD_SE_MODE);
-
-	load_all_PGs(in);
-
-	if (rev_comp_pair) {
-		fprintf(stderr, "Reverse complement second read from a pair\n");
-		if (joined_pg_len_std) apply_rc_pair_to_pg(pos_pg_32);
-		else apply_rc_pair_to_pg(pos_pg_64);
-	}
-
-//	if (pgrc_mode == PGRC_SE_MODE) seeding_SE();
-
-	fprintf(stderr, "Decompressed %d reads in total\n", total_reads_count);
-	in.close();
 }
 
 void CompSeeding::seed_and_extend(int batch_id, int tid) {
@@ -1511,11 +1315,15 @@ void CompSeeding::generate_sam(int seq_id) {
 	free(s.seq);
 }
 
-void CompSeeding::on_dec_reads(const char *fn) {
-	// Loading FM-index
-	bwa_idx = bwa_idx_load_from_shm(index_name.c_str());
+CompSeeding::CompSeeding() {
+	uint64_t stamp = __rdtsc(); sleep(1); cpu_frequency = __rdtsc() - stamp;
+	opt = mem_opt_init();
+}
+
+void CompSeeding::load_index(const char *fn) {
+	bwa_idx = bwa_idx_load_from_shm(fn);
 	if (bwa_idx == nullptr) {
-		bwa_idx = bwa_idx_load(index_name.c_str(), BWA_IDX_ALL);
+		bwa_idx = bwa_idx_load(fn, BWA_IDX_ALL);
 		if (bwa_idx == nullptr) {
 			fprintf(stderr, "Load the FM-index failed\n");
 			exit(EXIT_FAILURE);
@@ -1528,10 +1336,9 @@ void CompSeeding::on_dec_reads(const char *fn) {
 	bns = bwa_idx->bns;
 	bwt = bwa_idx->bwt;
 	pac = bwa_idx->pac;
-	opt = mem_opt_init();
+}
 
-	uint64_t stamp = __rdtsc(); sleep(1); cpu_frequency = __rdtsc() - stamp;
-
+void CompSeeding::on_dec_reads(const char *fn) {
 	// Prepare for thread auxiliary
 	thr_aux = new thread_aux_t[threads_n];
 	for (int i = 0; i < threads_n; i++) {
@@ -1551,9 +1358,7 @@ void CompSeeding::on_dec_reads(const char *fn) {
 		curr_position += off;
 		all_batch.emplace_back(std::string(buffer));
 		all_offset.push_back(curr_position);
-		read_length = (int)strlen(buffer);
-		bytes += read_length;
-		hq_reads_count++;
+		bytes += strlen(buffer);
 		total_reads_count++;
 		if (bytes >= chunk_size * threads_n) {
 			all_regs.resize(all_batch.size());
@@ -1566,22 +1371,6 @@ void CompSeeding::on_dec_reads(const char *fn) {
 		           (all_batch.size() + BATCH_SIZE - 1) / BATCH_SIZE);
 			phase1_cpu += cputime() - cpu_start; phase1_real += realtime() - real_start;
 
-			for (int i = 0; i < all_batch.size(); i++) {
-				const auto &regs = all_regs[i];
-//				fprintf(stdout, "Read %d has %ld aligned regions\n", i, regs.n);
-				for (int j = 0; j < regs.n; j++) {
-					const auto &a = regs.a[j];
-//					fwrite(&a, sizeof(a), 1, stdout);
-//					fprintf(stdout, "[%d, %d) ==> %d:[%ld, %ld)\n", a.qb, a.qe, a.rid, a.rb, a.re);
-//					fprintf(stdout, "score=%d, true_score=%d, sub=%d\n", a.score, a.truesc, a.sub);
-//					fprintf(stdout, "alt_sc=%d, csub=%d, sub_n=%d\n", a.alt_sc, a.csub, a.sub_n);
-//					fprintf(stdout, "bandwith=%d, seedcov=%d, seconday=%d\n", a.w, a.seedcov, a.secondary);
-//					fprintf(stdout, "secondary_all=%d, seedlen0=%d, n_cmp=%d\n", a.secondary_all, a.seedlen0, a.n_comp);
-//					fprintf(stdout, "is_alt=%d, frac=%.6f, hash=%ld\n", a.is_alt, a.frac_rep, a.hash);
-				}
-//				fprintf(stdout, "%s", all_sam[i].c_str());
-			}
-
 			// Phase 2: generate SAM from aligned regions
 			cpu_start = cputime(); real_start = realtime();
 			kt_for(threads_n,
@@ -1590,6 +1379,10 @@ void CompSeeding::on_dec_reads(const char *fn) {
 				all_batch.size());
 			phase2_cpu += cputime() - cpu_start; phase2_real += realtime() - real_start;
 
+			for (int i = 0; i < all_batch.size(); i++) {
+				const auto &regs = all_regs[i];
+				fprintf(stdout, "%s", all_sam[i].c_str());
+			}
 
 			for (int i = 0; i < all_batch.size(); i++) free(all_regs[i].a);
 			all_regs.clear();
@@ -1607,6 +1400,7 @@ void CompSeeding::on_dec_reads(const char *fn) {
 	display_profile();
 
 	free(opt);
+	bwa_idx_destroy(bwa_idx);
 	for (int i = 0; i < threads_n; i++) {
 		auto &a = thr_aux[i];
 		delete a.forward_sst;
@@ -1618,28 +1412,7 @@ void CompSeeding::on_dec_reads(const char *fn) {
 }
 
 void CompSeeding::bwamem(const char *fn) {
-	// Loading FM-index
-	bwa_idx = bwa_idx_load_from_shm(index_name.c_str());
-	if (bwa_idx == nullptr) {
-		bwa_idx = bwa_idx_load(index_name.c_str(), BWA_IDX_ALL);
-		if (bwa_idx == nullptr) {
-			fprintf(stderr, "Load the FM-index failed\n");
-			exit(EXIT_FAILURE);
-		} else {
-			fprintf(stderr, "Load the FM-index from disk\n");
-		}
-	} else {
-		fprintf(stderr, "Load the FM-index from shared memory\n");
-	}
-	bns = bwa_idx->bns;
-	bwt = bwa_idx->bwt;
-	pac = bwa_idx->pac;
-	opt = mem_opt_init();
 	opt->n_threads = threads_n;
-
-	uint64_t stamp = __rdtsc(); sleep(1); cpu_frequency = __rdtsc() - stamp;
-
-	// Prepare for thread auxiliary
 
 	fprintf(stderr, "Input test data with strand-corrected reads and overlapping information\n");
 	std::ifstream in(fn); assert(in.is_open());
@@ -1649,9 +1422,7 @@ void CompSeeding::bwamem(const char *fn) {
 		curr_position += off;
 		all_batch.emplace_back(std::string(buffer));
 		all_offset.push_back(curr_position);
-		read_length = (int)strlen(buffer);
-		bytes += read_length;
-		hq_reads_count++;
+		bytes += strlen(buffer);
 		total_reads_count++;
 		if (bytes >= chunk_size * threads_n) {
 			all_sam.resize(all_batch.size());
@@ -1678,7 +1449,7 @@ void CompSeeding::bwamem(const char *fn) {
 			}
 			free(seqs);
 
-//			for (int i = 0; i < n; i++) fprintf(stdout, "%s", all_sam[i].c_str());
+			for (int i = 0; i < n; i++) fprintf(stdout, "%s", all_sam[i].c_str());
 			all_sam.clear();
 
 			fprintf(stderr, "BWA-MEM: %d reads processed\n", total_reads_count);
@@ -1691,13 +1462,14 @@ void CompSeeding::bwamem(const char *fn) {
 	}
 
 	free(opt);
+	bwa_idx_destroy(bwa_idx);
 	in.close();
 	delete [] buffer;
 }
 
 int main(int argc, char *argv[]) {
 	if (argc == 1) {
-		fprintf(stderr, "Usage: PBM <bwa_index> <pgrc_archieve>\n");
+		fprintf(stderr, "Usage: PBM <bwa_index> <reads>\n");
 		return 1;
 	}
 	CompSeeding worker;
@@ -1712,13 +1484,10 @@ int main(int argc, char *argv[]) {
 			exit(EXIT_FAILURE);
 		}
 	}
-	worker.set_index_name(argv[optind]);
-	if (mode == "test") {
+	worker.load_index(argv[optind]);
+	if (mode == "comp") {
 		worker.on_dec_reads(argv[optind + 1]);
 	} else if (mode == "bwa") {
 		worker.bwamem(argv[optind + 1]);
-	} else if (mode == "pgrc") {
-		worker.set_archive_name(argv[optind + 1]);
-		worker.compressive_seeding();
 	}
 }
