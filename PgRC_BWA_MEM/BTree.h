@@ -30,7 +30,7 @@ private:
 	const int DEFAULT_BLOCK_SIZE = 512;
 
 	/** Initialize a tree with the given block size for storing one node */
-	inline void init(int size) {
+	void init(int size) {
 		t = ((size - sizeof(node_t) - sizeof(node_t*)) / (sizeof(node_t*) + sizeof(T)) + 1) / 2;
 		assert(t >= 2); // At least be order of 2
 		m = 2 * t - 1;
@@ -43,22 +43,22 @@ private:
 	int(*cmp)(const T&, const T&);
 
 	/** Return pointer to children[i] */
-	inline node_t** PTR(const node_t* s) { return ((node_t**)((char*)s + off_ptr)); }
+	node_t** PTR(const node_t* s) { return ((node_t**)((char*)s + off_ptr)); }
 
 	// Return pointer for elements
-	inline T* KEY(const node_t *s) { return ((T*)((char*)s + 4)); }
+	T* KEY(const node_t *s) { return ((T*)((char*)s + 4)); }
 
 	/** For debug and print */
 	std::map<const node_t*, int> pointer_dict;
 
-	inline int node_id(const node_t *x) {
+	int node_id(const node_t *x) {
 		if (pointer_dict.find(x) == pointer_dict.end()) {
 			pointer_dict[x] = pointer_dict.size();
 		}
 		return pointer_dict[x];
 	}
 
-	inline std::string node_str(const node_t *x) {
+	std::string node_str(const node_t *x) {
 		char buf[1024]; char *p = buf;
 		p += sprintf(p, "n=%d, p=%d {", x->n, node_id(x));
 		if (x->is_internal) {
@@ -80,7 +80,7 @@ private:
 	 * Put y[t-1] to the vacated position x[i+1], the both sides of which point to y and z, respectively.
 	 * Here the B-tree rule is hold: y < x[i+1] < z.
 	 * Note: x is the parent of y, and it is guaranteed to be not full. */
-	inline void split(node_t *x, int i, node_t *y) {
+	void split(node_t *x, int i, node_t *y) {
 		node_t *z = (node_t*) calloc(1, y->is_internal ? in_mem : ex_mem);
 		z->is_internal = y->is_internal; z->n = t - 1;
 		memcpy(KEY(z), KEY(y) + t, sizeof(T) * (t - 1));
@@ -97,7 +97,7 @@ private:
 	}
 
 	/** Binary search k in node x. Returned index is the last key < k or the first key = k in node x. */
-	inline int binary_search_node(const node_t *x, const T &k) {
+	int binary_search_node(const node_t *x, const T &k) {
 		if (x->n == 0) return -1;
 		int begin = 0, end = x->n;
 		while (begin < end) {
@@ -111,7 +111,7 @@ private:
 	}
 
 	/** In practice, DFS is faster than stack-implemented */
-	inline void traverse_recursion(const node_t *x, std::vector<T> &ans) {
+	void traverse_recursion(const node_t *x, std::vector<T> &ans) {
 		if (x->is_internal) {
 			for (int i = 0; i < x->n; i++) {
 				traverse_recursion(PTR(x)[i], ans);
@@ -125,7 +125,7 @@ private:
 		}
 	}
 
-	inline void destroy_recursion(node_t *x) {
+	void destroy_recursion(node_t *x) {
 		if (x->is_internal) {
 			for (int i = 0; i <= x->n; i++) {
 				destroy_recursion(PTR(x)[i]);
@@ -138,7 +138,7 @@ public:
 	BTree(int size, int(*cmp)(const T&, const T&)): cmp(cmp) { init(size); }
 	explicit BTree(int(*cmp)(const T&, const T&)): cmp(cmp) { init(DEFAULT_BLOCK_SIZE); }
 
-	inline void add(const T &k) {
+	void add(const T &k) {
 		keys_n++;
 		if (root->n == m) { // Special judge for overflow in root node
 			node_t *s = (node_t*) calloc(1, in_mem); // New root
@@ -163,7 +163,7 @@ public:
 		KEY(x)[i+1] = k; x->n++; // Extern node is guaranteed to be not full
 	}
 
-	inline void print() {
+	void print() {
 		std::stack<node_t*> st; st.push(root);
 		while (!st.empty()) {
 			node_t *x = st.top(); st.pop();
@@ -190,7 +190,7 @@ public:
 		}
 	}
 
-	inline void traverse_stack(std::vector<T> &ans) {
+	void traverse_stack(std::vector<T> &ans) {
 		ans.clear();
 		struct Item {
 			const node_t *x; // The visited node
@@ -224,12 +224,12 @@ public:
 		}
 	}
 
-	inline void traverse(std::vector<T> &ans) {
+	void traverse(std::vector<T> &ans) {
 		ans.clear();
 		traverse_recursion(root, ans);
 	}
 
-	inline void destroy() { destroy_recursion(root); }
+	void destroy() { destroy_recursion(root); }
 };
 
 #endif //PGRC_LEARN_BTREE_H
