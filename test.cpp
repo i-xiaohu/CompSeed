@@ -12,8 +12,6 @@
 #include "cstl/kbtree.h"
 #include "PgRC_BWA_MEM/BTree.h"
 
-#define cmp(a, b) ((a) - (b))
-
 std::map<const kbnode_t*, int> node_pointer;
 
 int node_id(const kbnode_t *x) {
@@ -42,24 +40,45 @@ static double localtime() {
 	return tp.tv_sec + tp.tv_usec * 1e-6;
 }
 
-KBTREE_INIT(qqq, int, cmp)
+struct Key {
+	int value, index;
+	Key() = default;
+	Key(int v , int i): value(v), index(i) {}
+};
 
-static inline int int_cmp(const int &a, const int &b) {
-	return a - b;
-}
+#define cmp(a, b) ((a).value - (b).value)
+
+KBTREE_INIT(qqq, Key, cmp)
 
 int main() {
-	std::vector<int> array;
-	int N = 100000000, MAX_VALUE = INT32_MAX;
+	std::vector<Key> array;
+	int N = 500000000, MAX_VALUE = 5000;
 	for (int i = 0; i < N; i++) {
-		array.push_back(rand() % MAX_VALUE);
+		array.emplace_back(Key(rand() % MAX_VALUE, i));
 	}
 	double t_start, total_start;
+	std::vector<Key> sorted;
+	std::vector<Key> truth;
+
+	total_start = t_start = localtime();
+	kbtree_t(qqq) *t = kb_init(qqq, KB_DEFAULT_SIZE);
+	for (auto a : array) kb_put(qqq, t, a);
+	fprintf(stderr, "Add: %.2f\n", localtime() - t_start);
+
+	t_start = localtime();
+	#define traversal_func(a) (truth.push_back(*(a)))
+	__kb_traverse(Key, t, traversal_func);
+	#undef traversal_func
+	fprintf(stderr, "traverse: %.2f\n", localtime() - t_start);
+
+	t_start = localtime();
+	__kb_destroy(t);
+	fprintf(stderr, "destroy: %.2f\n", localtime() - t_start);
+	fprintf(stderr, "C B-Tree: %.2f\n", localtime() - total_start);
 
 	// B-Tree (stack)
 	total_start = t_start = localtime();
-	BTree<int> tree(512, [](const int &a, const int &b) -> int { return a - b; });
-	std::vector<int> sorted;
+	BTree<Key> tree(512, [](const Key &a, const Key &b) -> int { return a.value - b.value; });
 	for (auto a : array) tree.add(a);
 	fprintf(stderr, "Add: %.2f\n", localtime() - t_start);
 
@@ -71,31 +90,11 @@ int main() {
 	tree.destroy();
 	fprintf(stderr, "destroy: %.2f\n", localtime() - t_start);
 	fprintf(stderr, "C++ B-Tree: %.2f\n", localtime() - total_start);
-	assert(sorted.size() == N);
-	for (int i = 1; i < sorted.size(); i++) {
-		assert(sorted[i] >= sorted[i-1]);
-	}
 
-	total_start = t_start = localtime();
-	kbtree_t(qqq) *t = kb_init(qqq, KB_DEFAULT_SIZE);
-	std::vector<int> truth;
-	for (auto a : array) kb_put(qqq, t, a);
-	fprintf(stderr, "Add: %.2f\n", localtime() - t_start);
-
-	t_start = localtime();
-	#define traversal_func(a) (truth.push_back(*(a)))
-	__kb_traverse(int, t, traversal_func);
-	#undef traversal_func
-	fprintf(stderr, "traverse: %.2f\n", localtime() - t_start);
-
-	t_start = localtime();
-	__kb_destroy(t);
-	fprintf(stderr, "destroy: %.2f\n", localtime() - t_start);
-	fprintf(stderr, "C B-Tree: %.2f\n", localtime() - total_start);
-	assert(truth.size() == N);
+	assert(sorted.size() == N); assert(truth.size() == N);
 	for (int i = 0; i < truth.size(); i++) {
-		assert(truth[i] == sorted[i]);
+		assert(truth[i].value == sorted[i].value);
+		assert(truth[i].index == sorted[i].index);
 	}
-
 }
 
