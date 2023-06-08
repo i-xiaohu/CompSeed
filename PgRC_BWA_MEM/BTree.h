@@ -98,6 +98,7 @@ private:
 
 	/** Binary search k in node x. Returned index is the last key < k or the first key = k in node x. */
 	inline int binary_search_node(const node_t *x, const T &k) {
+		if (x->n == 0) return -1;
 		int begin = 0, end = x->n;
 		while (begin < end) {
 			int mid = (begin + end) / 2;
