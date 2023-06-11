@@ -44,6 +44,8 @@
 
 static const bntseq_t *global_bns = 0; // for debugging only
 
+kstring_t *debug_out; // printing intermedia results to compare against the rewrote version
+
 mem_opt_t *mem_opt_init()
 {
 	mem_opt_t *o;
@@ -247,7 +249,7 @@ void mem_print_chain(const bntseq_t *bns, mem_chain_v *chn)
 	}
 }
 
-mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, int len, const uint8_t *seq, void *buf)
+mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, int len, const uint8_t *seq, void *buf, int seq_id)
 {
 	int i, b, e, l_rep;
 	int64_t l_pac = bns->l_pac;
@@ -269,6 +271,8 @@ mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 		else e = e > se? e : se;
 	}
 	l_rep += e - b;
+	typedef kvec_t(mem_seed_t) mem_seed_v;
+	mem_seed_v seeds; kv_init(seeds);
 	for (i = 0; i < aux->mem.n; ++i) {
 		bwtintv_t *p = &aux->mem.a[i];
 		int step, count, slen = (uint32_t)p->info - (p->info>>32); // seed length
@@ -282,6 +286,7 @@ mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 			s.rbeg = tmp.pos = bwt_sa(bwt, p->x[0] + k); // this is the base coordinate in the forward-reverse reference
 			s.qbeg = p->info>>32;
 			s.score= s.len = slen;
+			kv_push(mem_seed_t, seeds, s);
 			rid = bns_intv2rid(bns, s.rbeg, s.rbeg + s.len);
 			if (rid < 0) continue; // bridging multiple reference sequences or the forward-reverse boundary; TODO: split the seed; don't discard it!!!
 			if (kb_size(tree)) {
@@ -297,6 +302,11 @@ mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 				kb_putp(chn, tree, &tmp);
 			}
 		}
+	}
+	for (i = 0; i < seeds.n; i++) {
+		const mem_seed_t s = seeds.a[i];
+		kstring_t *d = &debug_out[seq_id];
+		ksprintf(d, "qbeg=%d, rbeg=%d, len=%d\n", s.qbeg, s.rbeg, s.len);
 	}
 	if (buf == 0) smem_aux_destroy(aux);
 
@@ -1047,7 +1057,7 @@ void mem_reg2sam(const mem_opt_t *opt, const bntseq_t *bns, const uint8_t *pac, 
 	}
 }
 
-mem_alnreg_v mem_align1_core(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, const uint8_t *pac, int l_seq, char *seq, void *buf)
+mem_alnreg_v mem_align1_core(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, const uint8_t *pac, int l_seq, char *seq, void *buf, int seq_id)
 {
 	int i;
 	mem_chain_v chn;
@@ -1056,7 +1066,7 @@ mem_alnreg_v mem_align1_core(const mem_opt_t *opt, const bwt_t *bwt, const bntse
 	for (i = 0; i < l_seq; ++i) // convert to 2-bit encoding if we have not done so
 		seq[i] = seq[i] < 4? seq[i] : nst_nt4_table[(int)seq[i]];
 
-	chn = mem_chain(opt, bwt, bns, l_seq, (uint8_t*)seq, buf);
+	chn = mem_chain(opt, bwt, bns, l_seq, (uint8_t*)seq, buf, seq_id);
 	chn.n = mem_chain_flt(opt, chn.n, chn.a);
 	mem_flt_chained_seeds(opt, bns, pac, l_seq, (uint8_t*)seq, chn.n, chn.a);
 	if (bwa_verbose >= 4) mem_print_chain(bns, &chn);
@@ -1174,12 +1184,12 @@ static void worker1(void *data, int i, int tid)
 	worker_t *w = (worker_t*)data;
 	if (!(w->opt->flag&MEM_F_PE)) {
 		if (bwa_verbose >= 4) printf("=====> Processing read '%s' <=====\n", w->seqs[i].name);
-		w->regs[i] = mem_align1_core(w->opt, w->bwt, w->bns, w->pac, w->seqs[i].l_seq, w->seqs[i].seq, w->aux[tid]);
+		w->regs[i] = mem_align1_core(w->opt, w->bwt, w->bns, w->pac, w->seqs[i].l_seq, w->seqs[i].seq, w->aux[tid], i);
 	} else {
 		if (bwa_verbose >= 4) printf("=====> Processing read '%s'/1 <=====\n", w->seqs[i<<1|0].name);
-		w->regs[i<<1|0] = mem_align1_core(w->opt, w->bwt, w->bns, w->pac, w->seqs[i<<1|0].l_seq, w->seqs[i<<1|0].seq, w->aux[tid]);
+		w->regs[i<<1|0] = mem_align1_core(w->opt, w->bwt, w->bns, w->pac, w->seqs[i<<1|0].l_seq, w->seqs[i<<1|0].seq, w->aux[tid], i);
 		if (bwa_verbose >= 4) printf("=====> Processing read '%s'/2 <=====\n", w->seqs[i<<1|1].name);
-		w->regs[i<<1|1] = mem_align1_core(w->opt, w->bwt, w->bns, w->pac, w->seqs[i<<1|1].l_seq, w->seqs[i<<1|1].seq, w->aux[tid]);
+		w->regs[i<<1|1] = mem_align1_core(w->opt, w->bwt, w->bns, w->pac, w->seqs[i<<1|1].l_seq, w->seqs[i<<1|1].seq, w->aux[tid], i);
 	}
 }
 
@@ -1203,6 +1213,8 @@ static void worker2(void *data, int i, int tid)
 
 void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, const uint8_t *pac, int64_t n_processed, int n, bseq1_t *seqs, const mem_pestat_t *pes0)
 {
+	debug_out = calloc(n, sizeof(kstring_t));
+
 	extern void kt_for(int n_threads, void (*func)(void*,int,int), void *data, int n);
 	worker_t w;
 	mem_pestat_t pes[4];
@@ -1230,4 +1242,8 @@ void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 	free(w.regs);
 	if (bwa_verbose >= 3)
 		fprintf(stderr, "[M::%s] Processed %d reads in %.3f CPU sec, %.3f real sec\n", __func__, n, cputime() - ctime, realtime() - rtime);
+
+	// Output debug information to stdout
+	for (i = 0; i < n; i++) fprintf(stdout, "%s\n", debug_out[i].s);
+	free(debug_out);
 }
