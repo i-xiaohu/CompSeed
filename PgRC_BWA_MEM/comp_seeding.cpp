@@ -21,77 +21,34 @@
 #include "../cstl/kstring.h"
 #include "../bwalib/utils.h"
 
-smem_aux_t *smem_aux_init() {
-	smem_aux_t *a;
-	a = (smem_aux_t*) calloc(1, sizeof(smem_aux_t));
-	a->tmpv[0] = (bwtintv_v*) calloc(1, sizeof(bwtintv_v));
-	a->tmpv[1] = (bwtintv_v*) calloc(1, sizeof(bwtintv_v));
-	return a;
+/********************************
+ * Bookmark 1: Seeding with SST *
+ ********************************/
+CompAligner::CompAligner() {
+	uint64_t stamp = __rdtsc(); sleep(1); cpu_frequency = __rdtsc() - stamp;
+	opt = mem_opt_init();
 }
 
-void smem_aux_destroy(smem_aux_t *a) {
-	free(a->tmpv[0]->a); free(a->tmpv[0]);
-	free(a->tmpv[1]->a); free(a->tmpv[1]);
-	free(a->mem.a); free(a->mem1.a);
-	free(a);
-}
-
-static void bwt_reverse_intvs(bwtintv_v *p) {
-	if (p->n > 1) {
-		int j;
-		for (j = 0; j < p->n>>1; ++j) {
-			bwtintv_t tmp = p->a[p->n - 1 - j];
-			p->a[p->n - 1 - j] = p->a[j];
-			p->a[j] = tmp;
+void CompAligner::load_index(const char *fn) {
+	bwa_idx = bwa_idx_load_from_shm(fn);
+	if (bwa_idx == nullptr) {
+		bwa_idx = bwa_idx_load(fn, BWA_IDX_ALL);
+		if (bwa_idx == nullptr) {
+			fprintf(stderr, "Load the FM-index `%s` failed\n", fn);
+			exit(EXIT_FAILURE);
+		} else {
+			fprintf(stderr, "Load the FM-index from disk\n");
 		}
+	} else {
+		fprintf(stderr, "Load the FM-index from shared memory\n");
 	}
+	bns = bwa_idx->bns;
+	bwt = bwa_idx->bwt;
+	pac = bwa_idx->pac;
 }
 
-static bool check_mem(const bwt_t *bwt, const std::string &s, const bwtintv_t &ref) {
-	bwtintv_t ik, ok[4];
-	bwt_set_intv(bwt, nst_nt4_table[s[0]], ik);
-	for (int i = 1; i < s.size(); i++) {
-		int c = nst_nt4_table[s[i]];
-		bwt_extend(bwt, &ik, ok, 1);
-		ik = ok[c];
-	}
-	bool correct = ref.x[0] == ik.x[0] and ref.x[1] == ik.x[1] and ref.x[2] == ik.x[2];
-	if (not correct) {
-		fprintf(stderr, "%s:[%ld, %ld, %ld] <-> [%ld, %ld, %ld]\n",
-		  s.c_str(),
-		  ik.x[0], ik.x[1], ik.x[2],
-		  ref.x[0], ref.x[1], ref.x[2]);
-	}
-	return correct;
-}
-
-static bool check_mem(const bwt_t *bwt, const uint8_t *seq, int start, int end, const bwtintv_t &ref) {
-	bwtintv_t ik, ok[4];
-	bwt_set_intv(bwt, seq[start], ik);
-	for (int i = start + 1; i < end; i++) {
-		bwt_extend(bwt, &ik, ok, 0);
-		ik = ok[3 - seq[i]];
-	}
-	return ref.x[0] == ik.x[0] and ref.x[1] == ik.x[1] and ref.x[2] == ik.x[2];
-}
-
-static void dfs_print_tree(SST *tree, int node, std::string &prefix) {
-	for (uint8_t c = 0; c < 4; c++) {
-		int next = tree->get_child(node, c);
-		if (next == -1) continue;
-		prefix.push_back("ACGT"[c]);
-		auto intv = tree->get_intv(next);
-		if (intv.x[0] + intv.x[1] + intv.x[2] > 0) {
-			fprintf(stderr, "%s\tSA:[%ld, %ld, %ld]\n",
-		        prefix.c_str(), intv.x[0], intv.x[1], intv.x[2]);
-		}
-		dfs_print_tree(tree, next, prefix);
-		prefix.pop_back();
-	}
-}
-
-int CompSeeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux_t &aux) {
-	aux.mem.clear();
+int CompAligner::collect_mem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux &aux) {
+	aux.super_mem.clear();
 	if (seq[pivot] > 3) return pivot + 1;
 	bwtintv_t ik, next[4];
 	int node_id = aux.forward_sst->query_forward_child(0, seq[pivot]);
@@ -120,8 +77,8 @@ int CompSeeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 		}
 	}
 	if (ret_pivot == len) aux.prev_intv.push_back(ik);
-	if (pivot == 0) { // Special judge
-		aux.mem.push_back(aux.prev_intv.back());
+	if (pivot == 0) { // Quickly return full-length matched reads
+		aux.super_mem.push_back(aux.prev_intv.back());
 		return ret_pivot;
 	}
 	std::reverse(aux.prev_intv.begin(), aux.prev_intv.end());
@@ -147,9 +104,9 @@ int CompSeeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 				next[c] = aux.backward_sst->get_intv(node_id);
 			}
 			if (c > 3 or next[c].x[2] < min_hits) {
-				if (aux.mem.empty() or i + 1 < aux.mem.back().info >> 32) {
+				if (aux.super_mem.empty() or i + 1 < aux.super_mem.back().info >> 32) {
 					ik.info = (1UL * (i + 1) << 32) | (int32_t)ik.info;
-					aux.mem.push_back(ik);
+					aux.super_mem.push_back(ik);
 				}
 			} else if (aux.curr_intv.empty() or next[c].x[2] != aux.curr_intv.back().x[2]) {
 				next[c].info = (1UL * node_id << 32) | (int32_t)ik.info;
@@ -162,7 +119,7 @@ int CompSeeding::collect_smem_with_sst(const uint8_t *seq, int len, int pivot, i
 	return ret_pivot;
 }
 
-int CompSeeding::tem_forward_sst(const uint8_t *seq, int len, int start, int min_len, int max_intv, bwtintv_t *mem, thread_aux_t &aux) {
+int CompAligner::tem_forward_sst(const uint8_t *seq, int len, int start, bwtintv_t *mem, thread_aux &aux) {
 	if (seq[start] > 3) return start + 1;
 	memset(mem, 0, sizeof(bwtintv_t));
 	int node_id = aux.forward_sst->query_forward_child(0, seq[start]);
@@ -172,7 +129,7 @@ int CompSeeding::tem_forward_sst(const uint8_t *seq, int len, int start, int min
 			int c = 3 - seq[i];
 			node_id = aux.forward_sst->query_forward_child(node_id, c);
 			ik = aux.forward_sst->get_intv(node_id);
-			if (ik.x[2] < max_intv && i - start >= min_len) {
+			if (ik.x[2] < opt->max_mem_intv && i - start >= opt->min_seed_len ) {
 				*mem = ik;
 				mem->info = (1UL * start << 32) | (i + 1);
 				return i + 1;
@@ -196,16 +153,15 @@ static std::string mem_str(const bwtintv_t &a) {
 	return std::string(buf);
 }
 
-/************
- * Chaining *
- ************/
-
+/***********************
+ * Bookmark 2 Chaining *
+ ***********************/
 typedef struct {
 	int n, m, first, rid;
 	uint32_t w:29, kept:2, is_alt:1;
 	float frac_rep;
 	int64_t pos;
-	mem_seed_t *seeds;
+	seed_hit *seeds;
 } mem_chain_t;
 
 typedef kvec_t(mem_chain_t) mem_chain_v;
@@ -214,9 +170,9 @@ typedef kvec_t(mem_chain_t) mem_chain_v;
 KBTREE_INIT(chn, mem_chain_t, chain_cmp)
 
 // return 1 if the seed is merged into the chain
-static int test_and_merge(const mem_opt_t *opt, int64_t l_pac, mem_chain_t *c, const mem_seed_t *p, int seed_rid) {
+static int test_and_merge(const mem_opt_t *opt, int64_t l_pac, mem_chain_t *c, const seed_hit *p, int seed_rid) {
 	int64_t qend, rend, x, y;
-	const mem_seed_t *last = &c->seeds[c->n-1];
+	const seed_hit *last = &c->seeds[c->n - 1];
 	qend = last->qbeg + last->len;
 	rend = last->rbeg + last->len;
 	if (seed_rid != c->rid) return 0; // different chr; request a new chain
@@ -228,7 +184,7 @@ static int test_and_merge(const mem_opt_t *opt, int64_t l_pac, mem_chain_t *c, c
 	if (y >= 0 && x - y <= opt->w && y - x <= opt->w && x - last->len < opt->max_chain_gap && y - last->len < opt->max_chain_gap) { // grow the chain
 		if (c->n == c->m) {
 			c->m <<= 1;
-			c->seeds = (mem_seed_t*) realloc(c->seeds, c->m * sizeof(mem_seed_t));
+			c->seeds = (seed_hit*) realloc(c->seeds, c->m * sizeof(seed_hit));
 		}
 		c->seeds[c->n++] = *p;
 		return 1;
@@ -240,14 +196,14 @@ int mem_chain_weight(const mem_chain_t *c) {
 	int64_t end;
 	int j, w = 0, tmp;
 	for (j = 0, end = 0; j < c->n; ++j) {
-		const mem_seed_t *s = &c->seeds[j];
+		const seed_hit *s = &c->seeds[j];
 		if (s->qbeg >= end) w += s->len;
 		else if (s->qbeg + s->len > end) w += s->qbeg + s->len - end;
 		end = end > s->qbeg + s->len? end : s->qbeg + s->len;
 	}
 	tmp = w; w = 0;
 	for (j = 0, end = 0; j < c->n; ++j) {
-		const mem_seed_t *s = &c->seeds[j];
+		const seed_hit *s = &c->seeds[j];
 		if (s->rbeg >= end) w += s->len;
 		else if (s->rbeg + s->len > end) w += s->rbeg + s->len - end;
 		end = end > s->rbeg + s->len? end : s->rbeg + s->len;
@@ -256,7 +212,7 @@ int mem_chain_weight(const mem_chain_t *c) {
 	return w < 1<<30? w : (1<<30)-1;
 }
 
-mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, int len, const uint8_t *seq, const std::vector<bwtintv_t> &mem, const std::vector<mem_seed_t> &seeds) {
+mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, int len, const uint8_t *seq, const std::vector<bwtintv_t> &mem, const std::vector<seed_hit> &seeds) {
 	mem_chain_v chain; kv_init(chain);
 	if (len < opt->min_seed_len) return chain; // if the query is shorter than the seed length, no match
 	kbtree_t(chn) *tree = kb_init(chn, KB_DEFAULT_SIZE);
@@ -281,7 +237,7 @@ mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 		} else to_add = 1;
 		if (to_add) { // add the seed as a new chain
 			tmp.n = 1; tmp.m = 4;
-			tmp.seeds = (mem_seed_t*) calloc(tmp.m, sizeof(mem_seed_t));
+			tmp.seeds = (seed_hit*) calloc(tmp.m, sizeof(seed_hit));
 			tmp.seeds[0] = s;
 			tmp.rid = rid;
 			tmp.is_alt = !!bns->anns[rid].is_alt;
@@ -379,7 +335,7 @@ int mem_chain_flt(const mem_opt_t *opt, int n_chn, mem_chain_t *a) {
 #define MEM_MINSC_COEF 5.5f
 #define MEM_SEEDSW_COEF 0.05f
 
-int mem_seed_sw(const mem_opt_t *opt, const bntseq_t *bns, const uint8_t *pac, int l_query, const uint8_t *query, const mem_seed_t *s)
+int mem_seed_sw(const mem_opt_t *opt, const bntseq_t *bns, const uint8_t *pac, int l_query, const uint8_t *query, const seed_hit *s)
 {
 	int qb, qe, rid;
 	int64_t rb, re, mid, l_pac = bns->l_pac;
@@ -414,7 +370,7 @@ void mem_flt_chained_seeds(const mem_opt_t *opt, const bntseq_t *bns, const uint
 	for (i = 0; i < n_chn; ++i) {
 		mem_chain_t *c = &a[i];
 		for (j = k = 0; j < c->n; ++j) {
-			mem_seed_t *s = &c->seeds[j];
+			seed_hit *s = &c->seeds[j];
 			s->score = mem_seed_sw(opt, bns, pac, l_query, query, s);
 			if (s->score < 0 || s->score >= min_HSP_score) {
 				s->score = s->score < 0? s->len * opt->a : s->score;
@@ -444,7 +400,7 @@ void mem_chain2aln(const mem_opt_t *opt, const bntseq_t *bns, const uint8_t *pac
 {
 	int i, k, rid, max_off[2], aw[2]; // aw: actual bandwidth used in extension
 	int64_t l_pac = bns->l_pac, rmax[2], tmp, max = 0;
-	const mem_seed_t *s;
+	const seed_hit *s;
 	uint8_t *rseq = 0;
 	uint64_t *srt;
 
@@ -453,7 +409,7 @@ void mem_chain2aln(const mem_opt_t *opt, const bntseq_t *bns, const uint8_t *pac
 	rmax[0] = l_pac<<1; rmax[1] = 0;
 	for (i = 0; i < c->n; ++i) {
 		int64_t b, e;
-		const mem_seed_t *t = &c->seeds[i];
+		const seed_hit *t = &c->seeds[i];
 		b = t->rbeg - (t->qbeg + cal_max_gap(opt, t->qbeg));
 		e = t->rbeg + t->len + ((l_query - t->qbeg - t->len) + cal_max_gap(opt, l_query - t->qbeg - t->len));
 		rmax[0] = rmax[0] < b? rmax[0] : b;
@@ -501,7 +457,7 @@ void mem_chain2aln(const mem_opt_t *opt, const bntseq_t *bns, const uint8_t *pac
 				printf("** Seed(%d) [%ld;%ld,%ld] is almost contained in an existing alignment [%d,%d) <=> [%ld,%ld)\n",
 				       k, (long)s->len, (long)s->qbeg, (long)s->rbeg, av->a[i].qb, av->a[i].qe, (long)av->a[i].rb, (long)av->a[i].re);
 			for (i = k + 1; i < c->n; ++i) { // check overlapping seeds in the same chain
-				const mem_seed_t *t;
+				const seed_hit *t;
 				if (srt[i] == 0) continue;
 				t = &c->seeds[(uint32_t)srt[i]];
 				if (t->len < s->len * .95) continue; // only check overlapping if t is long enough; TODO: more efficient by early stopping
@@ -584,7 +540,7 @@ void mem_chain2aln(const mem_opt_t *opt, const bntseq_t *bns, const uint8_t *pac
 
 		// compute seedcov
 		for (i = 0, a->seedcov = 0; i < c->n; ++i) {
-			const mem_seed_t *t = &c->seeds[i];
+			const seed_hit *t = &c->seeds[i];
 			if (t->qbeg >= a->qb && t->qbeg + t->len <= a->qe && t->rbeg >= a->rb && t->rbeg + t->len <= a->re) // seed fully contained
 				a->seedcov += t->len; // this is not very accurate, but for approx. mapQ, this is good enough
 		}
@@ -768,125 +724,112 @@ int mem_mark_primary_se(const mem_opt_t *opt, int n, mem_alnreg_t *a, int64_t id
 	return n_pri;
 }
 
-void CompSeeding::test_a_batch(int base, const std::vector<long> &offset, std::vector<std::string> &batch, thread_aux_t &aux) {
-	// Agency of thread auxiliary
-	auto &truth_mem = aux.truth_mem;
-	auto &truth_seed = aux.truth_seed;
-	auto &bwa_time = aux.bwa_time;
-	auto &comp_time = aux.comp_time;
-	auto *forward_sst = aux.forward_sst;
-	auto *backward_sst = aux.backward_sst;
-	auto &batch_mem = aux.batch_mem;
-	auto &batch_seed = aux.batch_seed;
-	auto &unique_sal = aux.unique_sal;
+void CompAligner::display_profile() {
+	thread_aux total;
+	for (int i = 0; i < threads_n; i++) total += thr_aux[i];
+	auto full_read_match = total.full_read_match;
+	auto shortcut = total.shortcut;
+	fprintf(stderr, "Input %d reads in total\n", total_reads_count);
+	fprintf(stderr, "Perfect Matched Reads: %d (%.2f %%)\n", full_read_match, 100.0 * full_read_match / total_reads_count);
+	fprintf(stderr, "Reads go shortcut:     %d (%.2f %%)\n", shortcut, 100.0 * shortcut / total_reads_count);
+}
 
-	forward_sst->clear(); backward_sst->clear();
-	long ref_position = -1;
-	for (int i = batch.size() - 1; i >= 0; i--) {
-		auto &read = batch[i];
-		for (auto &c : read) c = c < 5 ?c :nst_nt4_table[c];
+void CompAligner::seed_and_extend(int _start, int _end, int tid) {
+	auto &aux = thr_aux[tid];
+	aux.forward_sst->clear(); aux.backward_sst->clear();
+	_end = std::min(_end, (int) reads.size()); // Out of right boundary happens
+	int n = _end - _start;
+	long ref_position = -1; // Starting from this position might avoid many BWT-extension for fully matched reads
+	for (int i = n - 1; i >= 0; i--) {
+		auto &read = reads[_start + i];
+		auto *bases = (uint8_t*) read.bases;
+		for (int j = 0; j < read.len; j++) { // Convert ACGTN to 01234 if hasn't done so far
+			if (bases[j] > 4) bases[j] = nst_nt4_table[bases[j]];
+		}
 
-		long bwt_beg, bwt_end; uint64_t stamp;
-		bwt_beg = forward_sst->bwt_calls + backward_sst->bwt_calls;
-		std::vector<bwtintv_t> &smems = batch_mem[i]; smems.clear();
-		bool full_match = false;
-		if (ref_position != -1 and ref_position - offset[i] <= read.length() / 3) {
+		std::vector<bwtintv_t> &match = aux.match[i]; match.clear();
+		bool full_match = false; // Whether this read could be full-length matched
+		if (ref_position != -1 and ref_position - read.offset <= read.len / 3) {
 			// Lookup forward SST to test if this read can be fully matched
 			int node_id = 0;
-			for (int j = ref_position - offset[i]; j < read.length(); j++) {
-				if (read[j] < 4) {
-					if (j == ref_position - offset[i]) node_id = forward_sst->get_child(node_id, read[j]);
-					else node_id = forward_sst->get_child(node_id, 3 - read[j]);
+			for (int j = ref_position - read.offset; j < read.len; j++) {
+				if (bases[j] < 4) {
+					if (j == ref_position - read.offset) node_id = aux.forward_sst->get_child(node_id, bases[j]);
+					else node_id = aux.forward_sst->get_child(node_id, 3 - bases[j]);
 				} else node_id = -1;
 				if (node_id == -1) break;
 			}
-			if (node_id != -1) {
-				// matched in forward SST till the end of read
-				bwtintv_t ik = forward_sst->get_intv(node_id), ok[4];
+			if (node_id != -1) { // matched in forward SST till the end of read
+				bwtintv_t ik = aux.forward_sst->get_intv(node_id), ok[4];
 				// It is a potential full-match read
-				long temp_bwt_calls = 0;
-				for (int j = ref_position - offset[i] - 1; j >= 0; j--) {
-					if (read[j] < 4) {
-						bwt_extend(bwa_idx->bwt, &ik, ok, 1);
-						temp_bwt_calls++;
-						ik = ok[read[j]];
+				for (int j = ref_position - read.offset - 1; j >= 0; j--) {
+					if (bases[j] < 4) {
+						bwt_extend(bwt, &ik, ok, 1);
+						ik = ok[bases[j]];
 					} else ik.x[2] = 0;
 					if (ik.x[2] == 0) break;
 				}
-				aux.comp_bwt_calls[1] += temp_bwt_calls;
 				if (ik.x[2] > 0) {
 					full_match = true;
 					aux.shortcut++;
-					ik.info = read.length();
-					if (mem_len(ik) >= opt->min_seed_len) smems.push_back(ik);
-				} else {
-					aux.comp_bwt_calls[4] += temp_bwt_calls;
+					ik.info = read.len;
+					if (mem_len(ik) >= opt->min_seed_len) match.push_back(ik);
 				}
 			}
 		}
 
-		if (not full_match) {
-			for (int j = 0; j < read.length(); ) {
-				j = collect_smem_with_sst((const uint8_t*)read.c_str(), read.length(), j, 1, aux);
-				for (const auto &m : aux.mem) {
-					if (mem_len(m) >= opt->min_seed_len) {
-						smems.push_back(m);
-					}
+		if (not full_match) { // Go to the regular SMEM searching pass
+			for (int j = 0; j < read.len; ) {
+				j = collect_mem_with_sst(bases, read.len, j, 1, aux);
+				for (const auto &m : aux.super_mem) {
+					if (mem_len(m) >= opt->min_seed_len)
+						match.push_back(m);
 				}
 			}
-			ref_position = offset[i];
+			ref_position = read.offset;
 		}
-		bwt_end = forward_sst->bwt_calls + backward_sst->bwt_calls;
-		aux.comp_bwt_calls[1] += bwt_end - bwt_beg;
+		aux.full_read_match += (match.size() == 1 and mem_len(match[0]) == read.len);
 
-		bwt_beg = forward_sst->bwt_calls + backward_sst->bwt_calls;
-		int old_n = (int)smems.size();
+		int old_n = (int)match.size();
 		for (int j = 0; j < old_n; j++) {
-			const auto &p = smems[j] ;
-			int start = p.info >> 32, end = (int)p.info;
-			if (end - start < (int)(opt->min_seed_len * opt->split_factor + .499)
-			    or p.x[2] > opt->split_width) continue;
-			collect_smem_with_sst((const uint8_t*) read.c_str(), read.length(), (start + end) / 2, p.x[2] + 1, aux);
-			for (const auto &m : aux.mem) {
-				if ((int)m.info - (m.info >> 32) >= opt->min_seed_len) {
-					smems.push_back(m);
-				}
+			const auto &p = match[j] ;
+			int beg = mem_beg(p), end = mem_end(p);
+			if (end - beg < (int)(1.0 * opt->min_seed_len * opt->split_factor + .499) or p.x[2] > opt->split_width) continue;
+			collect_mem_with_sst(bases, read.len, (beg + end) / 2, p.x[2] + 1, aux);
+			for (const auto &m : aux.super_mem) {
+				if (mem_len(m) >= opt->min_seed_len)
+					match.push_back(m);
 			}
 		}
-		bwt_end = forward_sst->bwt_calls + backward_sst->bwt_calls;
-		aux.comp_bwt_calls[2] += bwt_end - bwt_beg;
 
-		bwt_beg = forward_sst->bwt_calls + backward_sst->bwt_calls;
 		if (opt->max_mem_intv > 0) {
-			for (int j = 0; j < read.length(); ) {
-				if (read[j] < 4) {
+			for (int j = 0; j < read.len; ) {
+				if (bases[j] < 4) {
 					bwtintv_t m;
-					j = tem_forward_sst((const uint8_t*) read.c_str(), read.length(), j, opt->min_seed_len, opt->max_mem_intv, &m, aux);
-					if (m.x[2] > 0) smems.push_back(m);
+					j = tem_forward_sst(bases, read.len, j, &m, aux);
+					if (m.x[2] > 0) match.push_back(m);
 				} else {
 					j++;
 				}
 			}
 		}
-		bwt_end = forward_sst->bwt_calls + backward_sst->bwt_calls;
-		aux.comp_bwt_calls[3] += bwt_end - bwt_beg;
-		std::sort(smems.begin(), smems.end(), mem_cmp);
+		std::sort(match.begin(), match.end(), mem_cmp);
 	}
 
 	// Find unique hit locations by merging and sorting
-	unique_sal.clear();
-	for (int read_id = 0; read_id < batch.size(); read_id++) {
-		const auto &mem = batch_mem[read_id];
-		auto &seed = batch_seed[read_id]; seed.clear();
+	auto unique_sal = aux.unique_sal; unique_sal.clear();
+	for (int read_id = 0; read_id < n; read_id++) {
+		const auto &mem = aux.match[read_id];
+		auto &seed = aux.seed[read_id]; seed.clear();
 		int array_id = 0;
 		for (const auto &m : mem) {
 			uint64_t step = m.x[2] > opt->max_occ ? m.x[2] / opt->max_occ : 1;
 			for (uint64_t k = 0, count = 0; k < m.x[2] && count < opt->max_occ; k += step, count++) {
-				mem_seed_t s;
+				seed_hit s;
 				s.qbeg = mem_beg(m);
 				s.score = s.len = mem_len(m);
 				seed.push_back(s);
-				unique_sal.emplace_back(SAL_Packed(m.x[0] + k, read_id, array_id));
+				unique_sal.emplace_back(sal_request(m.x[0] + k, read_id, array_id));
 				array_id++;
 			}
 		}
@@ -896,451 +839,27 @@ void CompSeeding::test_a_batch(int base, const std::vector<long> &offset, std::v
 	uint64_t coordinate = 0;
 	for (int i = 0; i < unique_sal.size(); i++) {
 		const auto &p = unique_sal[i];
-		if (i == 0 or unique_sal[i-1].hit_location != p.hit_location) {
-			coordinate = bwt_sa(bwa_idx->bwt, p.hit_location);
-			aux.comp_sal++;
+		if (i == 0 or unique_sal[i-1].que_location != p.que_location) {
+			coordinate = bwt_sa(bwa_idx->bwt, p.que_location);
 		}
-		auto &s = batch_seed[p.read_id][p.array_id];
+		auto &s = aux.seed[p.read_id][p.array_id];
 		s.rbeg = coordinate;
 		s.rid = bns_intv2rid(bwa_idx->bns, s.rbeg, s.rbeg + s.len);
 	}
 
-	for (int batch_id = 0; batch_id < batch.size(); batch_id++) {
-		int l_seq = batch[batch_id].length();
-		const auto *seq = (const uint8_t*) batch[batch_id].c_str();
-
-		// Chaining seeds
-		auto chn = mem_chain(opt, bwt, bns, l_seq, seq, batch_mem[batch_id], batch_seed[batch_id]);
-		chn.n = mem_chain_flt(opt, chn.n, chn.a);
-		mem_flt_chained_seeds(opt, bns, pac, l_seq, seq, chn.n, chn.a);
-
-		auto &regs = all_regs[base + batch_id]; kv_init(regs);
-		for (int i = 0; i < chn.n; i++) {
-			mem_chain_t *p = &chn.a[i];
-			mem_chain2aln(opt, bns, pac, l_seq, (uint8_t*)seq, p, &regs);
-			free(chn.a[i].seeds);
-		}
-		free(chn.a);
-		regs.n = mem_sort_dedup_patch(opt, bns, pac, (uint8_t*)seq, regs.n, regs.a);
-		for (int i = 0; i < regs.n; i++) {
-			mem_alnreg_t *p = &regs.a[i];
-			if (p->rid >= 0 && bns->anns[p->rid].is_alt)
-				p->is_alt = 1;
+	// Print seeds
+	for (int i = 0; i < n; i++) {
+		const auto &seed = aux.seed[i];
+		kstring_t *d = &debug_out[_start + i];
+		for (const auto &s : seed) {
+			ksprintf(d, "qbeg=%d, rbeg=%d, len=%d\n", s.qbeg, s.rbeg, s.len);
 		}
 	}
 }
 
-void CompSeeding::display_profile() {
-	thread_aux_t total;
-	for (int i = 0; i < threads_n; i++) total += thr_aux[i];
-	const auto &bwa_time = total.bwa_time;
-	const auto &comp_time = total.comp_time;
-	const auto *bwa_bwt_calls = total.bwa_bwt_calls;
-	const auto *comp_bwt_calls = total.comp_bwt_calls;
-	auto full_read_match = total.full_read_match;
-	auto shortcut = total.shortcut;
-	auto comp_sal = total.comp_sal, bwa_sal = total.bwa_sal;
-	auto bwa_bwt_ticks = total.bwa_bwt_ticks;
-	fprintf(stderr, "Input %d reads in total\n", total_reads_count);
-	fprintf(stderr, "Perfect Matched Reads: %d (%.2f %%)\n", full_read_match, 100.0 * full_read_match / total_reads_count);
-	fprintf(stderr, "Reads go shortcut:     %d (%.2f %%)\n", shortcut, 100.0 * shortcut / total_reads_count);
-	fprintf(stderr, "BWT Gain: Seeding(%ld) Reseed(%ld) Third(%ld) BWT_SUM(%ld) SAL(%ld)\n",
-	        comp_bwt_calls[1],
-	        comp_bwt_calls[2],
-	        comp_bwt_calls[3],
-	        (comp_bwt_calls[1] + comp_bwt_calls[2] + comp_bwt_calls[3]),
-	        comp_sal);
-	fprintf(stderr, "Wasted Comp BWT:    %.2f\n", 100.0 * comp_bwt_calls[4] / comp_bwt_calls[1]);
-}
-
-void CompSeeding::seed_and_extend(int batch_id, int tid) {
-	std::vector<std::string> batch;
-	std::vector<long> offset;
-	int start = batch_id * BATCH_SIZE, end = std::min((batch_id + 1) * BATCH_SIZE, (int)all_batch.size());
-	assert(start < all_batch.size() and end <= all_batch.size());
-	for (int i = start; i < end; i++) {
-		batch.push_back(all_batch[i]);
-		offset.push_back(all_offset[i]);
-	}
-//	fprintf(stdout, "Thread %d processed reads from %d to %d\n", tid, start, end);
-//	for (auto & i : batch) {
-//		fprintf(stdout, "%s\n", i.c_str());
-//	}
-	test_a_batch(batch_id * BATCH_SIZE, offset, batch, thr_aux[tid]);
-}
-
-/*****************************
- * Basic hit->SAM conversion *
- *****************************/
-
-#define MEM_F_PE        0x2
-#define MEM_F_NOPAIRING 0x4
-#define MEM_F_ALL       0x8
-#define MEM_F_NO_MULTI  0x10
-#define MEM_F_NO_RESCUE 0x20
-#define MEM_F_REF_HDR	0x100
-#define MEM_F_SOFTCLIP  0x200
-#define MEM_F_SMARTPE   0x400
-#define MEM_F_PRIMARY5  0x800
-#define MEM_F_KEEP_SUPP_MAPQ 0x1000
-
-static inline int infer_bw(int l1, int l2, int score, int a, int q, int r)
-{
-	int w;
-	if (l1 == l2 && l1 * a - score < (q + r - a)<<1) return 0; // to get equal alignment length, we need at least two gaps
-	w = ((double)((l1 < l2? l1 : l2) * a - score - q) / r + 2.);
-	if (w < abs(l1 - l2)) w = abs(l1 - l2);
-	return w;
-}
-
-static inline int get_rlen(int n_cigar, const uint32_t *cigar)
-{
-	int k, l;
-	for (k = l = 0; k < n_cigar; ++k) {
-		int op = cigar[k]&0xf;
-		if (op == 0 || op == 2)
-			l += cigar[k]>>4;
-	}
-	return l;
-}
-
-static inline void add_cigar(const mem_opt_t *opt, mem_aln_t *p, kstring_t *str, int which)
-{
-	int i;
-	if (p->n_cigar) { // aligned
-		for (i = 0; i < p->n_cigar; ++i) {
-			int c = p->cigar[i]&0xf;
-			if (!(opt->flag&MEM_F_SOFTCLIP) && !p->is_alt && (c == 3 || c == 4))
-				c = which? 4 : 3; // use hard clipping for supplementary alignments
-			kputw(p->cigar[i]>>4, str); kputc("MIDSH"[c], str);
-		}
-	} else kputc('*', str); // having a coordinate but unaligned (e.g. when copy_mate is true)
-}
-
-void mem_aln2sam(const mem_opt_t *opt, const bntseq_t *bns, kstring_t *str, bseq1_t *s, int n, const mem_aln_t *list, int which, const mem_aln_t *m_)
-{
-	int i, l_name;
-	mem_aln_t ptmp = list[which], *p = &ptmp, mtmp, *m = 0; // make a copy of the alignment to convert
-
-	if (m_) mtmp = *m_, m = &mtmp;
-	// set flag
-	p->flag |= m? 0x1 : 0; // is paired in sequencing
-	p->flag |= p->rid < 0? 0x4 : 0; // is mapped
-	p->flag |= m && m->rid < 0? 0x8 : 0; // is mate mapped
-	if (p->rid < 0 && m && m->rid >= 0) // copy mate to alignment
-		p->rid = m->rid, p->pos = m->pos, p->is_rev = m->is_rev, p->n_cigar = 0;
-	if (m && m->rid < 0 && p->rid >= 0) // copy alignment to mate
-		m->rid = p->rid, m->pos = p->pos, m->is_rev = p->is_rev, m->n_cigar = 0;
-	p->flag |= p->is_rev? 0x10 : 0; // is on the reverse strand
-	p->flag |= m && m->is_rev? 0x20 : 0; // is mate on the reverse strand
-
-	// print up to CIGAR
-	l_name = strlen(s->name);
-	ks_resize(str, str->l + s->l_seq + l_name + (s->qual? s->l_seq : 0) + 20);
-	kputsn(s->name, l_name, str); kputc('\t', str); // QNAME
-	kputw((p->flag&0xffff) | (p->flag&0x10000? 0x100 : 0), str); kputc('\t', str); // FLAG
-	if (p->rid >= 0) { // with coordinate
-		kputs(bns->anns[p->rid].name, str); kputc('\t', str); // RNAME
-		kputl(p->pos + 1, str); kputc('\t', str); // POS
-		kputw(p->mapq, str); kputc('\t', str); // MAPQ
-		add_cigar(opt, p, str, which);
-	} else kputsn("*\t0\t0\t*", 7, str); // without coordinte
-	kputc('\t', str);
-
-	// print the mate position if applicable
-	if (m && m->rid >= 0) {
-		if (p->rid == m->rid) kputc('=', str);
-		else kputs(bns->anns[m->rid].name, str);
-		kputc('\t', str);
-		kputl(m->pos + 1, str); kputc('\t', str);
-		if (p->rid == m->rid) {
-			int64_t p0 = p->pos + (p->is_rev? get_rlen(p->n_cigar, p->cigar) - 1 : 0);
-			int64_t p1 = m->pos + (m->is_rev? get_rlen(m->n_cigar, m->cigar) - 1 : 0);
-			if (m->n_cigar == 0 || p->n_cigar == 0) kputc('0', str);
-			else kputl(-(p0 - p1 + (p0 > p1? 1 : p0 < p1? -1 : 0)), str);
-		} else kputc('0', str);
-	} else kputsn("*\t0\t0", 5, str);
-	kputc('\t', str);
-
-	// print SEQ and QUAL
-	if (p->flag & 0x100) { // for secondary alignments, don't write SEQ and QUAL
-		kputsn("*\t*", 3, str);
-	} else if (!p->is_rev) { // the forward strand
-		int i, qb = 0, qe = s->l_seq;
-		if (p->n_cigar && which && !(opt->flag&MEM_F_SOFTCLIP) && !p->is_alt) { // have cigar && not the primary alignment && not softclip all
-			if ((p->cigar[0]&0xf) == 4 || (p->cigar[0]&0xf) == 3) qb += p->cigar[0]>>4;
-			if ((p->cigar[p->n_cigar-1]&0xf) == 4 || (p->cigar[p->n_cigar-1]&0xf) == 3) qe -= p->cigar[p->n_cigar-1]>>4;
-		}
-		ks_resize(str, str->l + (qe - qb) + 1);
-		for (i = qb; i < qe; ++i) str->s[str->l++] = "ACGTN"[(int)s->seq[i]];
-		kputc('\t', str);
-		if (s->qual) { // printf qual
-			ks_resize(str, str->l + (qe - qb) + 1);
-			for (i = qb; i < qe; ++i) str->s[str->l++] = s->qual[i];
-			str->s[str->l] = 0;
-		} else kputc('*', str);
-	} else { // the reverse strand
-		int i, qb = 0, qe = s->l_seq;
-		if (p->n_cigar && which && !(opt->flag&MEM_F_SOFTCLIP) && !p->is_alt) {
-			if ((p->cigar[0]&0xf) == 4 || (p->cigar[0]&0xf) == 3) qe -= p->cigar[0]>>4;
-			if ((p->cigar[p->n_cigar-1]&0xf) == 4 || (p->cigar[p->n_cigar-1]&0xf) == 3) qb += p->cigar[p->n_cigar-1]>>4;
-		}
-		ks_resize(str, str->l + (qe - qb) + 1);
-		for (i = qe-1; i >= qb; --i) str->s[str->l++] = "TGCAN"[(int)s->seq[i]];
-		kputc('\t', str);
-		if (s->qual) { // printf qual
-			ks_resize(str, str->l + (qe - qb) + 1);
-			for (i = qe-1; i >= qb; --i) str->s[str->l++] = s->qual[i];
-			str->s[str->l] = 0;
-		} else kputc('*', str);
-	}
-
-	// print optional tags
-	if (p->n_cigar) {
-		kputsn("\tNM:i:", 6, str); kputw(p->NM, str);
-		kputsn("\tMD:Z:", 6, str); kputs((char*)(p->cigar + p->n_cigar), str);
-	}
-	if (m && m->n_cigar) { kputsn("\tMC:Z:", 6, str); add_cigar(opt, m, str, which); }
-	if (p->score >= 0) { kputsn("\tAS:i:", 6, str); kputw(p->score, str); }
-	if (p->sub >= 0) { kputsn("\tXS:i:", 6, str); kputw(p->sub, str); }
-	if (bwa_rg_id[0]) { kputsn("\tRG:Z:", 6, str); kputs(bwa_rg_id, str); }
-	if (!(p->flag & 0x100)) { // not multi-hit
-		for (i = 0; i < n; ++i)
-			if (i != which && !(list[i].flag&0x100)) break;
-		if (i < n) { // there are other primary hits; output them
-			kputsn("\tSA:Z:", 6, str);
-			for (i = 0; i < n; ++i) {
-				const mem_aln_t *r = &list[i];
-				int k;
-				if (i == which || (r->flag&0x100)) continue; // proceed if: 1) different from the current; 2) not shadowed multi hit
-				kputs(bns->anns[r->rid].name, str); kputc(',', str);
-				kputl(r->pos+1, str); kputc(',', str);
-				kputc("+-"[r->is_rev], str); kputc(',', str);
-				for (k = 0; k < r->n_cigar; ++k) {
-					kputw(r->cigar[k]>>4, str); kputc("MIDSH"[r->cigar[k]&0xf], str);
-				}
-				kputc(',', str); kputw(r->mapq, str);
-				kputc(',', str); kputw(r->NM, str);
-				kputc(';', str);
-			}
-		}
-		if (p->alt_sc > 0)
-			ksprintf(str, "\tpa:f:%.3f", (double)p->score / p->alt_sc);
-	}
-	if (p->XA) { kputsn("\tXA:Z:", 6, str); kputs(p->XA, str); }
-	if (s->comment) { kputc('\t', str); kputs(s->comment, str); }
-	if ((opt->flag&MEM_F_REF_HDR) && p->rid >= 0 && bns->anns[p->rid].anno != 0 && bns->anns[p->rid].anno[0] != 0) {
-		int tmp;
-		kputsn("\tXR:Z:", 6, str);
-		tmp = str->l;
-		kputs(bns->anns[p->rid].anno, str);
-		for (i = tmp; i < str->l; ++i) // replace TAB in the comment to SPACE
-			if (str->s[i] == '\t') str->s[i] = ' ';
-	}
-	kputc('\n', str);
-}
-
-/**************
- * SAM format *
- **************/
-
-#define MEM_MAPQ_COEF 30.0
-int mem_approx_mapq_se(const mem_opt_t *opt, const mem_alnreg_t *a)
-{
-	int mapq, l, sub = a->sub? a->sub : opt->min_seed_len * opt->a;
-	double identity;
-	sub = a->csub > sub? a->csub : sub;
-	if (sub >= a->score) return 0;
-	l = a->qe - a->qb > a->re - a->rb? a->qe - a->qb : a->re - a->rb;
-	identity = 1. - (double)(l * opt->a - a->score) / (opt->a + opt->b) / l;
-	if (a->score == 0) {
-		mapq = 0;
-	} else if (opt->mapQ_coef_len > 0) {
-		double tmp;
-		tmp = l < opt->mapQ_coef_len? 1. : opt->mapQ_coef_fac / log(l);
-		tmp *= identity * identity;
-		mapq = (int)(6.02 * (a->score - sub) / opt->a * tmp * tmp + .499);
-	} else {
-		mapq = (int)(MEM_MAPQ_COEF * (1. - (double)sub / a->score) * log(a->seedcov) + .499);
-		mapq = identity < 0.95? (int)(mapq * identity * identity + .499) : mapq;
-	}
-	if (a->sub_n > 0) mapq -= (int)(4.343 * log(a->sub_n+1) + .499);
-	if (mapq > 60) mapq = 60;
-	if (mapq < 0) mapq = 0;
-	mapq = (int)(mapq * (1. - a->frac_rep) + .499);
-	return mapq;
-}
-
-void mem_reorder_primary5(int T, mem_alnreg_v *a)
-{
-	int k, n_pri = 0, left_st = INT_MAX, left_k = -1;
-	mem_alnreg_t t;
-	for (k = 0; k < a->n; ++k)
-		if (a->a[k].secondary < 0 && !a->a[k].is_alt && a->a[k].score >= T) ++n_pri;
-	if (n_pri <= 1) return; // only one alignment
-	for (k = 0; k < a->n; ++k) {
-		mem_alnreg_t *p = &a->a[k];
-		if (p->secondary >= 0 || p->is_alt || p->score < T) continue;
-		if (p->qb < left_st) left_st = p->qb, left_k = k;
-	}
-	assert(a->a[0].secondary < 0);
-	if (left_k == 0) return; // no need to reorder
-	t = a->a[0], a->a[0] = a->a[left_k], a->a[left_k] = t;
-	for (k = 1; k < a->n; ++k) { // update secondary and secondary_all
-		mem_alnreg_t *p = &a->a[k];
-		if (p->secondary == 0) p->secondary = left_k;
-		else if (p->secondary == left_k) p->secondary = 0;
-		if (p->secondary_all == 0) p->secondary_all = left_k;
-		else if (p->secondary_all == left_k) p->secondary_all = 0;
-	}
-}
-
-static inline int get_pri_idx(double XA_drop_ratio, const mem_alnreg_t *a, int i)
-{
-	int k = a[i].secondary_all;
-	if (k >= 0 && a[i].score >= a[k].score * XA_drop_ratio) return k;
-	return -1;
-}
-
-// Okay, returning strings is bad, but this has happened a lot elsewhere. If I have time, I need serious code cleanup.
-char **mem_gen_alt(const mem_opt_t *opt, const bntseq_t *bns, const uint8_t *pac, const mem_alnreg_v *a, int l_query, const char *query) // ONLY work after mem_mark_primary_se()
-{
-	int i, k, r, *cnt, tot;
-	kstring_t *aln = 0, str = {0,0,0};
-	char **XA = 0, *has_alt;
-
-	cnt = (int*) calloc(a->n, sizeof(int));
-	has_alt = (char*) calloc(a->n, 1);
-	for (i = 0, tot = 0; i < a->n; ++i) {
-		r = get_pri_idx(opt->XA_drop_ratio, a->a, i);
-		if (r >= 0) {
-			++cnt[r], ++tot;
-			if (a->a[i].is_alt) has_alt[r] = 1;
-		}
-	}
-	if (tot == 0) goto end_gen_alt;
-	aln = (kstring_t*) calloc(a->n, sizeof(kstring_t));
-	for (i = 0; i < a->n; ++i) {
-		mem_aln_t t;
-		if ((r = get_pri_idx(opt->XA_drop_ratio, a->a, i)) < 0) continue;
-		if (cnt[r] > opt->max_XA_hits_alt || (!has_alt[r] && cnt[r] > opt->max_XA_hits)) continue;
-		t = mem_reg2aln(opt, bns, pac, l_query, query, &a->a[i]);
-		str.l = 0;
-		kputs(bns->anns[t.rid].name, &str);
-		kputc(',', &str); kputc("+-"[t.is_rev], &str); kputl(t.pos + 1, &str);
-		kputc(',', &str);
-		for (k = 0; k < t.n_cigar; ++k) {
-			kputw(t.cigar[k]>>4, &str);
-			kputc("MIDSHN"[t.cigar[k]&0xf], &str);
-		}
-		kputc(',', &str); kputw(t.NM, &str);
-		kputc(';', &str);
-		free(t.cigar);
-		kputsn(str.s, str.l, &aln[r]);
-	}
-	XA = (char**) calloc(a->n, sizeof(char*));
-	for (k = 0; k < a->n; ++k)
-		XA[k] = aln[k].s;
-
-	end_gen_alt:
-	free(has_alt); free(cnt); free(aln); free(str.s);
-	return XA;
-}
-
-void mem_reg2sam(const mem_opt_t *opt, const bntseq_t *bns, const uint8_t *pac, bseq1_t *s, mem_alnreg_v *a, int extra_flag, const mem_aln_t *m) {
-	kstring_t str;
-	kvec_t(mem_aln_t) aa;
-	int k, l;
-	char **XA = 0;
-
-	if (!(opt->flag & MEM_F_ALL))
-		XA = mem_gen_alt(opt, bns, pac, a, s->l_seq, s->seq);
-	kv_init(aa);
-	str.l = str.m = 0; str.s = 0;
-	for (k = l = 0; k < a->n; ++k) {
-		mem_alnreg_t *p = &a->a[k];
-		mem_aln_t *q;
-		if (p->score < opt->T) continue;
-		if (p->secondary >= 0 && (p->is_alt || !(opt->flag&MEM_F_ALL))) continue;
-		if (p->secondary >= 0 && p->secondary < INT_MAX && p->score < a->a[p->secondary].score * opt->drop_ratio) continue;
-		q = kv_pushp(mem_aln_t, aa);
-		*q = mem_reg2aln(opt, bns, pac, s->l_seq, s->seq, p);
-		assert(q->rid >= 0); // this should not happen with the new code
-		q->XA = XA? XA[k] : 0;
-		q->flag |= extra_flag; // flag secondary
-		if (p->secondary >= 0) q->sub = -1; // don't output sub-optimal score
-		if (l && p->secondary < 0) // if supplementary
-			q->flag |= (opt->flag&MEM_F_NO_MULTI)? 0x10000 : 0x800;
-		if (!(opt->flag & MEM_F_KEEP_SUPP_MAPQ) && l && !p->is_alt && q->mapq > aa.a[0].mapq)
-			q->mapq = aa.a[0].mapq; // lower mapq for supplementary mappings, unless -5 or -q is applied
-		++l;
-	}
-	if (aa.n == 0) { // no alignments good enough; then write an unaligned record
-		mem_aln_t t;
-		t = mem_reg2aln(opt, bns, pac, s->l_seq, s->seq, 0);
-		t.flag |= extra_flag;
-		mem_aln2sam(opt, bns, &str, s, 1, &t, 0, m);
-	} else {
-		for (k = 0; k < aa.n; ++k)
-			mem_aln2sam(opt, bns, &str, s, aa.n, aa.a, k, m);
-		for (k = 0; k < aa.n; ++k) free(aa.a[k].cigar);
-		free(aa.a);
-	}
-	s->sam = str.s;
-	if (XA) {
-		for (k = 0; k < a->n; ++k) free(XA[k]);
-		free(XA);
-	}
-}
-
-void CompSeeding::generate_sam(int seq_id) {
-	auto &read = all_batch[seq_id];
-	bseq1_t s; // Read in BWA sequence format
-	memset(&s, 0, sizeof(s));
-	auto name = std::to_string(seq_id);
-	s.name = (char*) malloc(name.length() + 1);
-	strcpy(s.name, name.c_str());
-	s.id = seq_id;
-	s.l_seq = read.length();
-	s.seq = (char*) malloc(read.length() + 1);
-	strcpy(s.seq, read.c_str());
-	for (int i = 0; i < s.l_seq; i++) {
-		s.seq[i] = s.seq[i] < 5 ?s.seq[i] :nst_nt4_table[s.seq[i]];
-	}
-	mem_mark_primary_se(opt, all_regs[seq_id].n, all_regs[seq_id].a, n_processed + seq_id);
-	if (opt->flag & MEM_F_PRIMARY5) mem_reorder_primary5(opt->T, &all_regs[seq_id]);
-	mem_reg2sam(opt, bns, pac, &s, &all_regs[seq_id], 0, nullptr);
-	all_sam[seq_id] = std::string(s.sam);
-	free(s.name);
-	free(s.seq);
-}
-
-CompSeeding::CompSeeding() {
-	uint64_t stamp = __rdtsc(); sleep(1); cpu_frequency = __rdtsc() - stamp;
-	opt = mem_opt_init();
-}
-
-void CompSeeding::load_index(const char *fn) {
-	bwa_idx = bwa_idx_load_from_shm(fn);
-	if (bwa_idx == nullptr) {
-		bwa_idx = bwa_idx_load(fn, BWA_IDX_ALL);
-		if (bwa_idx == nullptr) {
-			fprintf(stderr, "Load the FM-index failed\n");
-			exit(EXIT_FAILURE);
-		} else {
-			fprintf(stderr, "Load the FM-index from disk\n");
-		}
-	} else {
-		fprintf(stderr, "Load the FM-index from shared memory\n");
-	}
-	bns = bwa_idx->bns;
-	bwt = bwa_idx->bwt;
-	pac = bwa_idx->pac;
-}
-
-void CompSeeding::on_dec_reads(const char *fn) {
+void CompAligner::run(const char *fn) {
 	// Prepare for thread auxiliary
-	thr_aux = new thread_aux_t[threads_n];
+	thr_aux = new thread_aux[threads_n];
 	for (int i = 0; i < threads_n; i++) {
 		auto &a = thr_aux[i];
 		a.forward_sst = new SST(bwa_idx->bwt);
@@ -1350,52 +869,37 @@ void CompSeeding::on_dec_reads(const char *fn) {
 	fprintf(stderr, "Input test data with strand-corrected reads and overlapping information\n");
 	std::ifstream in(fn); assert(in.is_open());
 	char *buffer = new char[1024]; memset(buffer, 0, 1024 * sizeof(char));
-	long off, curr_position = 0, bytes = 0;
-	int round_n = 0;
-	double phase1_cpu = 0, phase1_real = 0;
-	double phase2_cpu = 0, phase2_real = 0;
+	long off, global_offset = 0;
+	long bytes = 0, round_n = 0;
 	while (in >> buffer >> off) {
-		curr_position += off;
-		all_batch.emplace_back(std::string(buffer));
-		all_offset.push_back(curr_position);
-		bytes += strlen(buffer);
+		global_offset += off;
+		ngs_read read1;
+		read1.bases = strdup(buffer);
+		read1.len = strlen(buffer);
+		read1.offset = global_offset;
+		reads.push_back(read1);
+		bytes += read1.len;
 		total_reads_count++;
 		if (bytes >= chunk_size * threads_n) {
-			all_regs.resize(all_batch.size());
-			all_sam.resize(all_batch.size());
-			// Phase 1: seed and extend
-			double cpu_start = cputime(), real_start = realtime();
-			kt_for(threads_n,
-		        [](void *d, long i, int t) -> void { ((CompSeeding*)d)->seed_and_extend(i, t); },
-		        this,
-		           (all_batch.size() + BATCH_SIZE - 1) / BATCH_SIZE);
-			phase1_cpu += cputime() - cpu_start; phase1_real += realtime() - real_start;
-
-			// Phase 2: generate SAM from aligned regions
-			cpu_start = cputime(); real_start = realtime();
-			kt_for(threads_n,
-		        [](void *d, long i, int t) -> void { ((CompSeeding*)d)->generate_sam(i); },
+			debug_out = (kstring_t*) calloc(reads.size(), sizeof(kstring_t));
+			kt_for(
+				threads_n,
+				[](void *d, long i, int t) -> void {
+					((CompAligner*)d)->seed_and_extend(i*BATCH_SIZE, (i+1)*BATCH_SIZE, t);
+				},
 				this,
-				all_batch.size());
-			phase2_cpu += cputime() - cpu_start; phase2_real += realtime() - real_start;
-
-			for (int i = 0; i < all_batch.size(); i++) {
-				const auto &regs = all_regs[i];
-				fprintf(stdout, "%s", all_sam[i].c_str());
+				((int)reads.size() + BATCH_SIZE - 1) / BATCH_SIZE
+			);
+			for (auto &r : reads) { free(r.bases); free(r.sam); }
+			fprintf(stderr, "Seed and Extend: %d reads processed\n", total_reads_count);
+			for (int i = 0; i < reads.size(); i++) {
+				fprintf(stdout, "%s\n", debug_out[i].s);
+				free(debug_out[i].s);
 			}
-
-			for (int i = 0; i < all_batch.size(); i++) free(all_regs[i].a);
-			all_regs.clear();
-			all_sam.clear();
-			all_batch.clear();
-			all_offset.clear();
-			bytes = 0;
-			round_n++;
-			n_processed += all_batch.size();
-			fprintf(stderr, "Seed and Extend: %d reads processed. CPU usage phase1 %.2f phase2 %.2f\n",
-			        total_reads_count, phase1_cpu / phase1_real, phase2_cpu / phase2_real);
+			free(debug_out);
+			reads.clear(); bytes = 0; round_n++;
+			if (round_n >= input_round_limit) break;
 		}
-		if (round_n > big_data_round_limit) break;
 	}
 	display_profile();
 
@@ -1411,54 +915,37 @@ void CompSeeding::on_dec_reads(const char *fn) {
 	delete [] buffer;
 }
 
-void CompSeeding::bwamem(const char *fn) {
+void CompAligner::bwamem(const char *fn) {
 	opt->n_threads = threads_n;
 
 	fprintf(stderr, "Input test data with strand-corrected reads and overlapping information\n");
 	std::ifstream in(fn); assert(in.is_open());
 	char *buffer = new char[1024]; memset(buffer, 0, 1024 * sizeof(char));
-	long off, curr_position = 0, bytes = 0, round_n = 0;
+	long off, bytes = 0, round_n = 0, n_processed = 0;
+	std::vector<bseq1_t> bwa_seqs;
 	while (in >> buffer >> off) {
-		curr_position += off;
-		all_batch.emplace_back(std::string(buffer));
-		all_offset.push_back(curr_position);
-		bytes += strlen(buffer);
+		bseq1_t read1{0};
+		read1.id = total_reads_count;
+		read1.name = strdup(std::to_string(total_reads_count).c_str());
+		read1.seq = strdup(buffer);
+		read1.l_seq = (int) strlen(buffer);
+		bwa_seqs.push_back(read1);
 		total_reads_count++;
+		bytes += read1.l_seq;
 		if (bytes >= chunk_size * threads_n) {
-			all_sam.resize(all_batch.size());
-			int n = all_batch.size();
-			auto *seqs = (bseq1_t*) calloc(n, sizeof(bseq1_t));
+			int n = bwa_seqs.size();
+			mem_process_seqs(opt, bwt, bns, pac, n_processed, n, bwa_seqs.data(), nullptr);
+			n_processed += n;
 			for (int i = 0; i < n; i++) {
-				const auto &read = all_batch[i];
-				auto &s = seqs[i];
-				auto name = std::to_string(i);
-				s.name = (char*) malloc(name.length() + 1);
-				strcpy(s.name, name.c_str());
-				s.id = i;
-				s.l_seq = read.length();
-				s.seq = (char*) malloc(read.length() + 1);
-				strcpy(s.seq, read.c_str());
+				const auto &s = bwa_seqs[i];
+//				fprintf(stdout, "%s", s.sam);
+				free(s.name); free(s.seq); free(s.sam);
 			}
-			mem_process_seqs(opt, bwt, bns, pac, n_processed, all_batch.size(), seqs, nullptr);
-			n_processed += all_batch.size();
-			for (int i = 0; i < n; i++) {
-				const auto &s = seqs[i];
-				all_sam[i] = std::string(s.sam);
-				free(s.name);
-				free(s.seq);
-			}
-			free(seqs);
-
-			for (int i = 0; i < n; i++) fprintf(stdout, "%s", all_sam[i].c_str());
-			all_sam.clear();
 
 			fprintf(stderr, "BWA-MEM: %d reads processed\n", total_reads_count);
-			bytes = 0;
-			all_batch.clear();
-			all_offset.clear();
-			round_n++;
+			bwa_seqs.clear(); bytes = 0; round_n++;
+			if (round_n >= input_round_limit) break;
 		}
-		if (round_n > big_data_round_limit) break;
 	}
 
 	free(opt);
@@ -1472,22 +959,26 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "Usage: PBM <bwa_index> <reads>\n");
 		return 1;
 	}
-	CompSeeding worker;
+	CompAligner worker;
 	int c; bool input_test = false;
 	std::string mode = "test";
-	while ((c = getopt(argc, argv, "t:m:")) >= 0) {
+	while ((c = getopt(argc, argv, "t:m:r:")) >= 0) {
 		if (c == 't') {
-			worker.set_threads(atoi(optarg));
+			worker.threads_n = strtol(optarg, nullptr, 10);
+		} else if (c == 'r') {
+			worker.input_round_limit = strtol(optarg, nullptr, 10);
 		} else if (c == 'm') {
 			mode = std::string(optarg);
 		} else {
+			fprintf(stderr, "Unrecognized option\n");
 			exit(EXIT_FAILURE);
 		}
 	}
 	worker.load_index(argv[optind]);
 	if (mode == "comp") {
-		worker.on_dec_reads(argv[optind + 1]);
+		worker.run(argv[optind + 1]);
 	} else if (mode == "bwa") {
 		worker.bwamem(argv[optind + 1]);
 	}
+	return 0;
 }
