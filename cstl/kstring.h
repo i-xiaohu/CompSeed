@@ -8,6 +8,10 @@
 #  include "malloc_wrap.h"
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef kroundup32
 #define kroundup32(x) (--(x), (x)|=(x)>>1, (x)|=(x)>>2, (x)|=(x)>>4, (x)|=(x)>>8, (x)|=(x)>>16, ++(x))
 #endif
@@ -111,5 +115,9 @@ static inline int kputl(long c, kstring_t *s)
 }
 
 int ksprintf(kstring_t *s, const char *fmt, ...);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

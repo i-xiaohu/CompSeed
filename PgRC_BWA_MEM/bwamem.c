@@ -1244,6 +1244,9 @@ void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 		fprintf(stderr, "[M::%s] Processed %d reads in %.3f CPU sec, %.3f real sec\n", __func__, n, cputime() - ctime, realtime() - rtime);
 
 	// Output debug information to stdout
-	for (i = 0; i < n; i++) fprintf(stdout, "%s\n", debug_out[i].s);
+	for (i = 0; i < n; i++) {
+		fprintf(stdout, "%s\n", debug_out[i].s);
+		free(debug_out[i].s);
+	}
 	free(debug_out);
 }

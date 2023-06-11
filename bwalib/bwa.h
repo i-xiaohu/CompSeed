@@ -58,11 +58,10 @@ typedef struct {
 typedef struct {
 	int l_seq, id;
 	char *name, *comment, *seq, *qual, *sam;
-	uint8_t *seeds;
 	uint64_t hvalue;
 } bseq1_t;
 
-extern int bwa_verbose, bwa_dbg;
+extern int bwa_verbose;
 extern char bwa_rg_id[256];
 
 #ifdef __cplusplus
