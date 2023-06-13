@@ -249,6 +249,22 @@ void mem_print_chain(const bntseq_t *bns, mem_chain_v *chn)
 	}
 }
 
+void print_chains_to(const bntseq_t *bns, mem_chain_v *chn, kstring_t *s) {
+	int i, j;
+	for (i = 0; i < chn->n; ++i) {
+		mem_chain_t *p = &chn->a[i];
+		ksprintf(s, "* Found CHAIN(%d): n=%d; weight=%d", i, p->n, mem_chain_weight(p));
+		for (j = 0; j < p->n; ++j) {
+			bwtint_t pos;
+			int is_rev;
+			pos = bns_depos(bns, p->seeds[j].rbeg, &is_rev);
+			if (is_rev) pos -= p->seeds[j].len - 1;
+			ksprintf(s, "\t%d;%d;%d,%ld(%s:%c%ld)", p->seeds[j].score, p->seeds[j].len, p->seeds[j].qbeg, (long)p->seeds[j].rbeg, bns->anns[p->rid].name, "+-"[is_rev], (long)(pos - bns->anns[p->rid].offset) + 1);
+		}
+		ksprintf(s, "\n");
+	}
+}
+
 mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, int len, const uint8_t *seq, void *buf, int seq_id)
 {
 	int i, b, e, l_rep;
@@ -271,8 +287,6 @@ mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 		else e = e > se? e : se;
 	}
 	l_rep += e - b;
-	typedef kvec_t(mem_seed_t) mem_seed_v;
-	mem_seed_v seeds; kv_init(seeds);
 	for (i = 0; i < aux->mem.n; ++i) {
 		bwtintv_t *p = &aux->mem.a[i];
 		int step, count, slen = (uint32_t)p->info - (p->info>>32); // seed length
@@ -286,7 +300,6 @@ mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 			s.rbeg = tmp.pos = bwt_sa(bwt, p->x[0] + k); // this is the base coordinate in the forward-reverse reference
 			s.qbeg = p->info>>32;
 			s.score= s.len = slen;
-			kv_push(mem_seed_t, seeds, s);
 			rid = bns_intv2rid(bns, s.rbeg, s.rbeg + s.len);
 			if (rid < 0) continue; // bridging multiple reference sequences or the forward-reverse boundary; TODO: split the seed; don't discard it!!!
 			if (kb_size(tree)) {
@@ -302,11 +315,6 @@ mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 				kb_putp(chn, tree, &tmp);
 			}
 		}
-	}
-	for (i = 0; i < seeds.n; i++) {
-		const mem_seed_t s = seeds.a[i];
-		kstring_t *d = &debug_out[seq_id];
-		ksprintf(d, "qbeg=%d, rbeg=%d, len=%d\n", s.qbeg, s.rbeg, s.len);
 	}
 	if (buf == 0) smem_aux_destroy(aux);
 
@@ -1067,6 +1075,8 @@ mem_alnreg_v mem_align1_core(const mem_opt_t *opt, const bwt_t *bwt, const bntse
 		seq[i] = seq[i] < 4? seq[i] : nst_nt4_table[(int)seq[i]];
 
 	chn = mem_chain(opt, bwt, bns, l_seq, (uint8_t*)seq, buf, seq_id);
+	kstring_t *d = &debug_out[seq_id];
+	print_chains_to(bns, &chn, d);
 	chn.n = mem_chain_flt(opt, chn.n, chn.a);
 	mem_flt_chained_seeds(opt, bns, pac, l_seq, (uint8_t*)seq, chn.n, chn.a);
 	if (bwa_verbose >= 4) mem_print_chain(bns, &chn);

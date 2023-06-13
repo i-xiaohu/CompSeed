@@ -62,6 +62,72 @@ struct sal_request {
 	}
 };
 
+/** Chain of co-linear seeds */
+struct seed_chain { // Do not change this unaligned struct; it affects the B-tree order
+	int64_t anchor; // Anchor or the first seed location
+	int rid; // Chain can't cross multiple chromosomes
+	int first; //
+	int n, m; seed_hit *seeds; // Storing chained seeds
+	uint32_t w:29, kept:2, is_alt:1; // Chain weight; Kept level; alternative or not
+	float frac_rep; // Repetitive segment fraction across the chain
+
+	seed_chain() = default;
+
+	seed_chain(int64_t anchor): anchor(anchor) {}
+
+	int64_t ref_beg() const { return seeds[0].rbeg; }
+
+	int64_t ref_end() const { return seeds[n-1].rbeg + seeds[n-1].len; }
+
+	int que_beg() const { return seeds[0].qbeg; }
+
+	int que_end() const { return seeds[n-1].qbeg + seeds[n-1].len; }
+
+	void first_seed(const seed_hit &s) {
+		n = 1; m = 16;
+		seeds = (seed_hit*) malloc(m * sizeof(seed_hit));
+		seeds[0] = s;
+		rid = s.rid;
+	}
+
+	void push_back(const seed_hit &s) {
+		if (n == m){
+			m *= 2;
+			seeds = (seed_hit*) realloc(seeds, m * sizeof(seed_hit));
+		}
+		seeds[n++] = s;
+	}
+
+	int weight() const {
+		// Seeds are non-decreasing on both read and reference
+		int que_end = 0, weight_on_que = 0;
+		for (int i = 0; i < n; i++) {
+			const auto &s = seeds[i];
+			if (s.qbeg >= que_end) weight_on_que += s.len;
+			else if (s.qbeg + s.len > que_end) weight_on_que += s.qbeg + s.len - que_end;
+			que_end = std::max(que_end, s.qbeg + s.len);
+		}
+
+		int64_t ref_end = 0, weight_on_ref = 0;
+		for (int i = 0; i < n; i++) {
+			const auto &s = seeds[i];
+			if (s.rbeg >= ref_end) weight_on_ref += s.len;
+			else if (s.rbeg + s.len > ref_end) weight_on_ref += s.rbeg + s.len - ref_end;
+			ref_end = std::max(ref_end, s.rbeg + s.len);
+		}
+
+		return std::min((int)weight_on_ref, weight_on_que);
+	}
+};
+
+struct PPPP {
+	int n, m, first, rid;
+	uint32_t w:29, kept:2, is_alt:1;
+	float frac_rep;
+	int64_t pos;
+	seed_hit *seeds;
+};
+
 /** How many reads to process at a time. Batch size can impact the performance of compressive aligner.
  * Increasing batch size could dig out more redundancy but lowering the load balancing of threads.
  * Lowering batch size could not make good use of benefits provided by compressors. */
@@ -116,6 +182,13 @@ public:
 	static int collect_mem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux &aux);
 
 	int tem_forward_sst(const uint8_t *seq, int len, int start, bwtintv_t *mem, thread_aux &aux);
+
+	/** chaining seeds and filtering out light-weight chains and seeds. */
+	std::vector<seed_chain> chaining(const std::vector<seed_hit> &seed);
+
+	bool add_seed_to_chain(seed_chain *c, const seed_hit &s);
+
+	void print_chains_to(const std::vector<seed_chain> &chains, kstring_t *s);
 
 	/** Align reads from start to end-1 with thread tid. */
 	void seed_and_extend(int start, int end, int tid);
