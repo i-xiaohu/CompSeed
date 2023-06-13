@@ -185,12 +185,18 @@ public:
 
 	int tem_forward_sst(const uint8_t *seq, int len, int start, bwtintv_t *mem, thread_aux &aux);
 
-	/** chaining seeds and filtering out light-weight chains and seeds. */
+	/** Chaining seeds and filtering out light-weight chains and seeds. */
 	std::vector<seed_chain> chaining(const std::vector<seed_hit> &seed);
 
 	bool add_seed_to_chain(seed_chain *c, const seed_hit &s);
 
 	void print_chains_to(const std::vector<seed_chain> &chains, kstring_t *s);
+
+	/** Filtering poor seed in chain (not for short reads) */
+	void filter_seed_in_chain(const ngs_read &read, std::vector<seed_chain> &chain);
+
+	/** Calculate Smith-Waterman score for a seed */
+	int seed_sw_score(const ngs_read &read, const seed_hit &s);
 
 	/** Align reads from start to end-1 with thread tid. */
 	void seed_and_extend(int start, int end, int tid);

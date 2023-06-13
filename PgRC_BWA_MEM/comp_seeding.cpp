@@ -308,6 +308,61 @@ std::vector<seed_chain> CompAligner::chaining(const std::vector<seed_hit> &seed)
 	return chain;
 }
 
+int CompAligner::seed_sw_score(const ngs_read &read, const seed_hit &s) {
+	const int MEM_SHORT_LEN = 200;
+	const int MEM_SHORT_EXT = 50;
+	// The seed is longer than the max-extend; no need for SW
+	if (s.len >= MEM_SHORT_LEN) return -1;
+
+	int qb = std::max(0, s.qbeg - MEM_SHORT_EXT);
+	int qe = std::min((int)read.len, s.qbeg + s.len + MEM_SHORT_EXT);
+	int64_t rb = std::max(0L, s.rbeg - MEM_SHORT_EXT);
+	int64_t re = std::min(bns->l_pac * 2, s.rbeg + s.len + MEM_SHORT_EXT);
+	int64_t mid = (s.rbeg + s.rbeg + s.len) / 2;
+	if (rb < bns->l_pac and bns->l_pac < re) {
+		if (mid < bns->l_pac) re = bns->l_pac;
+		else rb = bns->l_pac;
+	}
+	// The seed seems good enough; no need for SW
+	if (qe - qb >= MEM_SHORT_LEN or re - rb >= MEM_SHORT_LEN) return -1;
+
+	int rid;
+	uint8_t *ref = bns_fetch_seq(bns, pac, &rb, mid, &re, &rid);
+	kswr_t ans = ksw_align2(
+			qe - qb, (uint8_t*)(read.bases + qb),
+			re - rb, ref,
+			5, opt->mat,
+			opt->o_del, opt->e_del,
+			opt->o_ins, opt->e_ins,
+			KSW_XSTART,
+			nullptr);
+	free(ref);
+	return ans.score;
+}
+
+void CompAligner::filter_seed_in_chain(const ngs_read &read, std::vector<seed_chain> &chain) {
+	const float MEM_HSP_COEF = 1.1f;
+	const float MEM_MINSC_COEF = 5.5f;
+	const float MEM_SEEDSW_COEF = 0.05f;
+
+	double min_l = opt->min_chain_weight ? MEM_HSP_COEF * (float)opt->min_chain_weight
+										 : MEM_MINSC_COEF * log(read.len);
+	if (min_l > MEM_SEEDSW_COEF * (float)read.len) return; // Don't suit to short reads
+	int min_hsp_score = (int)(opt->a * min_l + 0.499);
+	for (auto &c : chain) {
+		int kept_seed_n = 0;
+		for (int i = 0; i < c.n; i++) {
+			auto &s = c.seeds[i];
+			s.score = seed_sw_score(read, s);
+			if (s.score < 0 or s.score >= min_hsp_score) {
+				s.score = s.score < 0 ?read.len * opt->a :s.score;
+				c.seeds[kept_seed_n++] = s;
+			}
+		}
+		c.n = kept_seed_n;
+	}
+}
+
 void CompAligner::display_profile() {
 	thread_aux total;
 	for (int i = 0; i < threads_n; i++) total += thr_aux[i];
@@ -433,8 +488,11 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 
 	// Print seeds
 	for (int i = 0; i < n; i++) {
+		const auto &read = reads[_start + i];
+
+		// Chaining co-linear seeds
 		const auto &seed = aux.seed[i];
-		auto chains = chaining(seed);
+		auto chain = chaining(seed);
 
 		// Calculate repetition fraction of chains
 		const auto &mem = aux.match[i];
@@ -446,13 +504,16 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 			else end = std::max(end, e);
 		}
 		l_repetition += end - beg;
-		for (auto &c : chains) {
-			c.frac_rep = (float)l_repetition / (float)reads[_start + i].len;
+		for (auto &c : chain) {
+			c.frac_rep = (float)l_repetition / read.len;
 		}
 
+		// Filter poor seeds in chain
+		filter_seed_in_chain(read, chain);
+
 		kstring_t *d = &debug_out[_start + i];
-		print_chains_to(chains, d);
-		for (auto &c : chains) c.destroy();
+		print_chains_to(chain, d);
+		for (auto &c : chain) c.destroy();
 	}
 }
 
