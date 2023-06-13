@@ -66,7 +66,7 @@ struct sal_request {
 struct seed_chain { // Do not change this unaligned struct; it affects the B-tree order
 	int64_t anchor; // Anchor or the first seed location
 	int rid; // Chain can't cross multiple chromosomes
-	int first; //
+	int first_cover; // Which chain that the current chain first shadows
 	int n, m; seed_hit *seeds; // Storing chained seeds
 	uint32_t w:29, kept:2, is_alt:1; // Chain weight; Kept level; alternative or not
 	float frac_rep; // Repetitive segment fraction across the chain
@@ -83,7 +83,7 @@ struct seed_chain { // Do not change this unaligned struct; it affects the B-tre
 
 	int que_end() const { return seeds[n-1].qbeg + seeds[n-1].len; }
 
-	void first_seed(const seed_hit &s) {
+	void add_first_seed(const seed_hit &s) {
 		n = 1; m = 16;
 		seeds = (seed_hit*) malloc(m * sizeof(seed_hit));
 		seeds[0] = s;
@@ -98,7 +98,7 @@ struct seed_chain { // Do not change this unaligned struct; it affects the B-tre
 		seeds[n++] = s;
 	}
 
-	int weight() const {
+	int calc_weight() const {
 		// Seeds are non-decreasing on both read and reference
 		int que_end = 0, weight_on_que = 0;
 		for (int i = 0; i < n; i++) {
@@ -118,6 +118,8 @@ struct seed_chain { // Do not change this unaligned struct; it affects the B-tre
 
 		return std::min((int)weight_on_ref, weight_on_que);
 	}
+
+	void destroy() const { free(seeds); }
 };
 
 struct PPPP {

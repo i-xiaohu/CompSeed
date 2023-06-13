@@ -1076,8 +1076,8 @@ mem_alnreg_v mem_align1_core(const mem_opt_t *opt, const bwt_t *bwt, const bntse
 
 	chn = mem_chain(opt, bwt, bns, l_seq, (uint8_t*)seq, buf, seq_id);
 	kstring_t *d = &debug_out[seq_id];
-	print_chains_to(bns, &chn, d);
 	chn.n = mem_chain_flt(opt, chn.n, chn.a);
+	print_chains_to(bns, &chn, d);
 	mem_flt_chained_seeds(opt, bns, pac, l_seq, (uint8_t*)seq, chn.n, chn.a);
 	if (bwa_verbose >= 4) mem_print_chain(bns, &chn);
 

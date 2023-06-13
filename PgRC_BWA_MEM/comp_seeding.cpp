@@ -160,26 +160,6 @@ static std::string mem_str(const bwtintv_t &a) {
 #define chain_cmp(a, b) (((b).anchor < (a).anchor) - ((a).anchor < (b).anchor))
 KBTREE_INIT(chn, seed_chain, chain_cmp)
 
-//bool CompAligner::add_seed_to_chain(seed_chain &c, const seed_hit &s) {
-//	if (s.rid != c.rid) return false; // Seed is not on same chromosome with chain
-//	const auto &last = c.seeds[c.n - 1];
-//	assert(s.qbeg >= last.qbeg); // Guaranteed by sorting matches
-//	if (s.rbeg < last.rbeg) return false; // Chained seeds should be co-linear on both read and reference
-//	if (s.qbeg + s.len <= c.que_end() and s.rbeg + s.len <= c.ref_end()) {
-//		return true; // Seed in contained in chain
-//	}
-//	if ((last.rbeg < bns->l_pac or c.ref_beg() < bns->l_pac) and s.rbeg >= bns->l_pac) {
-//		return false; // Seed is on different strand from chain
-//	}
-//	if (// Minimum insertion/deletions should be within DP matrix bandwidth
-//		std::abs((s.qbeg - last.qbeg) - (s.rbeg - last.rbeg)) <= opt->w
-//		// Gap between chain and seed on both read and reference is limited
-//		and s.qbeg - c.que_end() < opt->max_chain_gap and s.rbeg - c.ref_end() < opt->max_chain_gap) {
-//		c.push_back(s); // Grow the chain
-//		return true;
-//	} else return false;
-//}
-
 bool CompAligner::add_seed_to_chain(seed_chain *c, const seed_hit &s) {
 	if (s.rid != c->rid) return false; // Seed is not on same chromosome with chain
 	if (s.qbeg >= c->que_beg() and s.qbeg + s.len <= c->que_end()  and
@@ -190,9 +170,15 @@ bool CompAligner::add_seed_to_chain(seed_chain *c, const seed_hit &s) {
 	if ((last.rbeg < bns->l_pac or c->ref_beg() < bns->l_pac) and s.rbeg >= bns->l_pac) {
 		return false; // Seed is on different strand from chain
 	}
-	int64_t x = s.qbeg - last.qbeg;
+	int64_t x = s.qbeg - last.qbeg; // Non-negative; guaranteed by sorting matches
 	int64_t y = s.rbeg - last.rbeg;
-	if (y >= 0 and std::abs(x - y) <= opt->w and x - last.len < opt->max_chain_gap and y - last.len < opt->max_chain_gap) {
+	if (// Chained seeds should be co-linear on both read and reference
+		y >= 0 and
+		// Minimum insertion/deletions should be within DP matrix bandwidth
+		std::abs(x - y) <= opt->w and
+		// Gap between chain and seed on both read and reference is limited
+		x - last.len < opt->max_chain_gap and y - last.len < opt->max_chain_gap
+	) {
 		c->push_back(s); // Grow the chain
 		return true;
 	} else {
@@ -203,7 +189,7 @@ bool CompAligner::add_seed_to_chain(seed_chain *c, const seed_hit &s) {
 void CompAligner::print_chains_to(const std::vector<seed_chain> &chains, kstring_t *s) {
 	for (int i = 0; i < chains.size(); i++) {
 		const auto &c = chains[i];
-		ksprintf(s, "* Found CHAIN(%d): n=%d; weight=%d", i, c.n, c.weight());
+		ksprintf(s, "* Found CHAIN(%d): n=%d; weight=%d", i, c.n, c.calc_weight());
 		for (int j = 0; j < c.n; j++) {
 			bwtint_t pos; int is_rev;
 			pos = bns_depos(bns, c.seeds[j].rbeg, &is_rev);
@@ -217,6 +203,9 @@ void CompAligner::print_chains_to(const std::vector<seed_chain> &chains, kstring
 		ksprintf(s, "\n");
 	}
 }
+
+#define flt_lt(a, b) ((a).w > (b).w)
+KSORT_INIT(flt, seed_chain, flt_lt)
 
 std::vector<seed_chain> CompAligner::chaining(const std::vector<seed_hit> &seed) {
 	kbtree_chn_t *tree = kb_init_chn(KB_DEFAULT_SIZE) ;
@@ -232,7 +221,7 @@ std::vector<seed_chain> CompAligner::chaining(const std::vector<seed_hit> &seed)
 			}
 		}
 		if (need_new_chain) {
-			tmp.first_seed(s);
+			tmp.add_first_seed(s);
 			tmp.is_alt = bns->anns[s.rid].is_alt;
 			kb_putp_chn(tree, &tmp);
 		}
@@ -245,6 +234,77 @@ std::vector<seed_chain> CompAligner::chaining(const std::vector<seed_hit> &seed)
 	#undef traverse_func
 	kb_destroy(chn, tree);
 
+	if (chain.empty()) return chain;
+
+	// Drop chains with the weight smaller than the specified minimum
+	const int DOMINATE = 3; // Dominating chains with large weight
+	const int SHADOWED = 2; // Shadowed by another chain
+	const int DISCARD = 0; // Dropped chain
+	int kept_chain_n = 0;
+	for (auto &c : chain) {
+		c.kept = DISCARD;
+		c.first_cover = -1;
+		c.w = c.calc_weight();
+		if (c.w < opt->min_chain_weight) c.destroy();
+		else chain[kept_chain_n++] = c;
+	}
+	chain.resize(kept_chain_n);
+	// Sort chains by decreasing weight
+	auto *chain_array = chain.data();
+	ks_introsort_flt(kept_chain_n, chain_array);
+	// Pairwise comparing chains
+	std::vector<int> kept_index; // Storing the indexes of kept chains
+	chain[0].kept = DOMINATE;
+	kept_index.push_back(0);
+	for (int i = 1; i < chain.size(); i++) {
+		bool masked = false, dropped = false;
+		for (auto j : kept_index) { // Check whether the current chain is overlapped by any kept chain
+			int beg_max = std::max(chain[i].que_beg(), chain[j].que_beg());
+			int end_min = std::min(chain[i].que_end(), chain[j].que_end());
+			if (end_min > beg_max and not (chain[j].is_alt and not chain[i].is_alt)) { // Overlap found
+				// When the kept chain is alternative and the current chain is primary, don't consider overlap
+				int min_len = std::min(
+					chain[i].que_end() - chain[i].que_beg(),
+					chain[j].que_end() - chain[j].que_beg()
+				);
+				if ((float)(end_min - beg_max) >= (float)min_len * opt->mask_level
+					and min_len < opt->max_chain_gap) {
+					masked = true;
+					// Record the first or heaviest chain that a kept chain shadows for more accurate MAPQ
+					if (chain[j].first_cover < 0) chain[j].first_cover = i;
+					if ((float)chain[i].w < (float) chain[j].w * opt->drop_ratio
+						and chain[j].w - chain[i].w >= opt->min_seed_len * 2) {
+						dropped = true;
+						break;
+					}
+				}
+			}
+		}
+		if (not dropped) {
+			chain[i].kept = masked ?SHADOWED :DOMINATE;
+			kept_index.push_back(i);
+		}
+	}
+	for (auto i : kept_index) {
+		const auto &c = chain[i];
+		if (c.first_cover >= 0) {
+			chain[c.first_cover].kept = 1; // the function of value 1?
+		}
+	}
+	// Do not extend too many insignificant chains
+	int to_extend = 0;
+	for (auto &i : kept_index) {
+		auto &c = chain[i];
+		if (c.kept == DOMINATE) continue;
+		to_extend++;
+		if (to_extend >= opt->max_chain_extend) c.kept = DISCARD;
+	}
+	kept_chain_n = 0;
+	for (const auto &c : chain) {
+		if (c.kept == DISCARD) c.destroy();
+		else chain[kept_chain_n++] = c;
+	}
+	chain.resize(kept_chain_n);
 	return chain;
 }
 
@@ -387,12 +447,12 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 		}
 		l_repetition += end - beg;
 		for (auto &c : chains) {
-			c.frac_rep = (float) l_repetition / reads[_start + i].len;
+			c.frac_rep = (float)l_repetition / (float)reads[_start + i].len;
 		}
 
 		kstring_t *d = &debug_out[_start + i];
 		print_chains_to(chains, d);
-		for (auto &c : chains) free(c.seeds);
+		for (auto &c : chains) c.destroy();
 	}
 }
 
