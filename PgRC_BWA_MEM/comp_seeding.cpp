@@ -363,6 +363,216 @@ void CompAligner::filter_seed_in_chain(const ngs_read &read, std::vector<seed_ch
 	}
 }
 
+static inline int calc_max_gap(const mem_opt_t *opt, int len) {
+	int l_del = (int) ((double)(len * opt->a - opt->o_del) / opt->e_del + 1.0);
+	int l_ins = (int) ((double)(len * opt->a - opt->o_ins) / opt->e_ins + 1.0);
+	int l = std::max(l_del, l_ins); // Maximum insertions or deletions
+	l = std::max(l, 1); // At least one
+	return std::min(l, opt->w * 2); // Should not exceed two times bandwidth
+}
+
+std::vector<align_region> CompAligner::
+	extend_chain(const ngs_read &read, std::vector<seed_chain> &chain) {
+	// Filter poor seeds in chain
+	filter_seed_in_chain(read, chain);
+
+	// Extend the chains of the read
+	std::vector<align_region> regions;
+	for (const auto &c : chain) {
+		// All seeds are poor and discarded
+		if (c.n == 0) { c.destroy(); continue; }
+
+		// Get the max possible span
+		int64_t span_l = bns->l_pac * 2, span_r = 0;
+		for (int i = 0; i < c.n; i++) {
+			const auto &s = c.seeds[i];
+			// Margins on both sides of the seed
+			int margin_l = s.qbeg, margin_r = (read.len - (s.qbeg + s.len));
+			int64_t beg = s.rbeg - (margin_l + calc_max_gap(opt, margin_l));
+			int64_t end = s.rbeg + s.len + (margin_r + calc_max_gap(opt, margin_r));
+			span_l = std::min(span_l, beg);
+			span_r = std::max(span_r, end);
+		}
+		span_l = std::max(span_l, 0L);
+		span_r = std::min(span_r, bns->l_pac * 2);
+		// Choose one side if crossing the forward-reverse boundary
+		if (span_l < bns->l_pac and bns->l_pac < span_r) {
+			// It is safe because all seeds on the chain are guaranteed to be on the same strand
+			if (c.ref_beg() < bns->l_pac) span_r = bns->l_pac;
+			else span_l = bns->l_pac;
+		}
+		// Prefetch the reference sequence for all possible seed extensions
+		int rid; // On the same chromosome with the chain
+		auto *ref_seq = bns_fetch_seq(bns, pac, &span_l, c.ref_beg(), &span_r, &rid);
+		assert(rid == c.rid);
+
+		// Sort seeds by score
+		auto *sorted = (uint64_t*) malloc(c.n * sizeof(uint64_t));
+		for (uint64_t i = 0; i < c.n; i++) {
+			sorted[i] = (uint64_t)c.seeds[i].score << 32U | i;
+		}
+		ks_introsort_64(c.n, sorted);
+
+		// Extend seeds from high score
+		for (int k = c.n - 1; k >= 0; k--) {
+			const auto &s = c.seeds[(uint32_t)sorted[k]];
+			// Test whether extension has been made before
+			bool contained = false;
+			for (const auto &p : regions) {
+				if (s.rbeg < p.rb or s.rbeg + s.len > p.re or  // The seed is not fully contained in the alignment
+				    s.qbeg < p.qb or s.qbeg + s.len > p.qe) continue;
+				if (s.len - p.seed_len0 > 0.1 * read.len) continue; // The seed might extend into a better alignment
+				int que_dis = s.qbeg - p.qb; // The distance ahead of the seed on query
+				int64_t ref_dis = s.rbeg - p.rb; // The distance ahead of the seed on reference
+				// The maximal gap allowed in the region ahead of the seed
+				int max_gap = calc_max_gap(opt, std::min((int64_t)que_dis, ref_dis));
+				int width = std::min(max_gap, p.band_width); // Bounded by the band width
+				// The seed is "around" the previous alignment
+				if (abs(que_dis - ref_dis) < width) { contained = true; break; }
+
+				// Check for the region behind the seed
+				que_dis = p.qe - (s.qbeg + s.len); // The distance behind the seed on query
+				ref_dis = p.re - (s.rbeg + s.len); // The distance behind the seed on reference
+				max_gap = calc_max_gap(opt, std::min((int64_t)que_dis, ref_dis));
+				width = std::min(max_gap, p.band_width);
+				if (abs(que_dis - ref_dis) < width) { contained = true; break; }
+			}
+			// The seed is almost contained contained in an existing aligned region.
+			// Further testing is needed to confirm it is not leading to a difference alignment.
+			if (contained) {
+				bool overlapped = false;
+				for (int i = k + 1; i < c.n; i++) { // Loop for seeds have been extended
+					if (sorted[i] == 0) continue; // The extension is skipped
+					const auto &t = c.seeds[(uint32_t)sorted[i]];
+					if (t.len < s.len * 0.95) continue; // Check overlap only if t is long enough
+					if (s.qbeg <= t.qbeg and s.qbeg + s.len - t.qbeg >= s.len / 4 and
+						t.qbeg - s.qbeg != t.rbeg - s.rbeg) { overlapped = true; break; }
+					if (t.qbeg <= s.qbeg and t.qbeg + t.len - s.qbeg >= s.len / 4 and
+					    s.qbeg - t.qbeg != s.rbeg - t.rbeg) { overlapped = true; break; }
+				}
+				if (not overlapped) { // No overlapping seeds, skip the extension
+					sorted[k] = 0; // Mark this seed extension has not been performed
+					continue;
+				}
+			}
+
+			// Perform extension for the seed that could lead to a new aligned region
+			align_region a = {0};
+			a.rid = c.rid;
+			a.frac_rep = c.frac_rep;
+			a.seed_len0 = s.len;
+			a.local_score = -1;
+			a.true_score = -1;
+
+			// Left Extension (target length is long enough for local alignment)
+			int que_len = s.qbeg, tar_len = s.rbeg - span_l;
+			int actual_bw_left = opt->w; // Actual bandwidth of the DP matrix
+			const int MAX_BAND_TRY = 2;
+			if (que_len > 0) {
+				auto *qs = (uint8_t*) malloc(que_len * sizeof(uint8_t));
+				for (int i = 0; i < que_len; i++) qs[i] = read.bases[s.qbeg - 1 - i];
+				auto *ts = (uint8_t*) malloc(tar_len * sizeof(uint8_t));
+				for (int i = 0; i < tar_len; i++) ts[i] = ref_seq[tar_len - 1 - i];
+				// Terminals on query and target of the extension for local alignment
+				int local_que_ext, local_tar_ext;
+				// Semi-global alignment if the query sequence is entirely aligned.
+				// The extension has reached the end of query, only recording terminal on target.
+				int global_tar_ext, global_score;
+				int max_off; // Maximum offset from the DP matrix diagonal
+				for (int i = 0; i < MAX_BAND_TRY; i++) {
+					int prev_score = a.local_score;
+					actual_bw_left = opt->w << i;
+					a.local_score = ksw_extend2(
+							que_len, qs, tar_len, ts,
+							5, opt->mat, opt->o_del, opt->e_del, opt->o_ins, opt->e_ins,
+							actual_bw_left,
+							opt->pen_clip5,
+							opt->zdrop,
+							s.len * opt->a,
+							&local_que_ext, &local_tar_ext,
+							&global_tar_ext, &global_score,
+							&max_off);
+					// Stop increasing the bandwidth if the DP score does not change or
+					// maximum offsetting diagonal distance < 75% of the applied bandwidth
+					if (a.local_score == prev_score or max_off < actual_bw_left / 2 + actual_bw_left / 4) break;
+				}
+				// Semi-global alignment is preferred if its score greater than the
+				// best local score minus the penalty of left soft clipping.
+				if (global_score > 0 and global_score > a.local_score - opt->pen_clip5) {
+					a.qb = 0;
+					a.rb = s.rbeg - global_tar_ext;
+					a.true_score = global_score;
+				} else { // Otherwise, choose local alignment
+					a.qb = s.qbeg - local_que_ext;
+					a.rb = s.rbeg - local_tar_ext;
+					a.true_score = a.local_score;
+				}
+				free(qs); free(ts);
+			} else {
+				// The seed reaches the left end of the read
+				a.local_score = a.true_score = s.len * opt->a;
+				a.qb = 0; a.rb = s.rbeg;
+			}
+
+			// Right extension (similar to left extension)
+			que_len = read.len - (s.qbeg + s.len);
+			tar_len = span_r - (s.rbeg + s.len);
+			int actual_bw_right = opt->w;
+			if (que_len > 0) {
+				int score0 = a.local_score; // The initial DP score
+				int local_que_ext, local_tar_ext;
+				int global_tar_ext, global_score;
+				int max_off;
+				for (int i = 0; i < MAX_BAND_TRY; i++) {
+					int prev_score = a.local_score;
+					actual_bw_right = opt->w << i;
+					a.local_score = ksw_extend2(
+							que_len, (uint8_t*)read.bases + (s.qbeg + s.len),
+							tar_len, ref_seq + (s.rbeg + s.len) - span_l,
+							5, opt->mat, opt->o_del, opt->e_del, opt->o_ins, opt->e_ins,
+							actual_bw_right,
+							opt->pen_clip3,
+							opt->zdrop,
+							score0,
+							&local_que_ext, &local_tar_ext,
+							&global_tar_ext, &global_score,
+							&max_off);
+					if (a.local_score == prev_score or max_off < actual_bw_right / 2 + actual_bw_right / 4) break;
+				}
+				if (global_score > 0 and global_score > a.local_score - opt->pen_clip3) {
+					a.qe = read.len;
+					a.re = s.rbeg + s.len + global_tar_ext;
+					a.true_score += global_score - score0;
+				} else {
+					a.qe = s.qbeg + s.len + local_que_ext;
+					a.re = s.rbeg + s.len + local_tar_ext;
+					a.true_score += a.local_score - score0;
+				}
+			} else {
+				a.qe = read.len;
+				a.re = s.rbeg + s.len;
+			}
+
+			a.band_width = std::max(actual_bw_left, actual_bw_right);
+			// Compute seed coverage on this alignment
+			a.seed_cover = 0;
+			for (int i = 0; i < c.n; i++) {
+				const auto &t = c.seeds[i];
+				if (t.qbeg >= a.qb and t.qbeg + t.len <= a.qe and
+					t.rbeg >= a.rb and t.rbeg + t.len <= a.re) { // Seed fully contained
+					// This is not very accurate, but good enough for approximate MAPQ
+					a.seed_cover += t.len;
+				}
+			}
+			regions.push_back(a);
+		}
+
+		free(sorted); free(ref_seq);
+		c.destroy();
+	}
+	return regions;
+}
+
 void CompAligner::display_profile() {
 	thread_aux total;
 	for (int i = 0; i < threads_n; i++) total += thr_aux[i];
@@ -464,7 +674,7 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 		for (const auto &m : mem) {
 			uint64_t step = m.x[2] > opt->max_occ ? m.x[2] / opt->max_occ : 1;
 			for (uint64_t k = 0, count = 0; k < m.x[2] && count < opt->max_occ; k += step, count++) {
-				seed_hit s;
+				seed_hit s = {0};
 				s.qbeg = mem_beg(m);
 				s.score = s.len = mem_len(m);
 				seed.push_back(s);
@@ -486,14 +696,12 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 		s.rid = bns_intv2rid(bwa_idx->bns, s.rbeg, s.rbeg + s.len);
 	}
 
-	// Print seeds
 	for (int i = 0; i < n; i++) {
 		const auto &read = reads[_start + i];
 
 		// Chaining co-linear seeds
 		const auto &seed = aux.seed[i];
 		auto chain = chaining(seed);
-
 		// Calculate repetition fraction of chains
 		const auto &mem = aux.match[i];
 		int beg = 0, end = 0, l_repetition = 0;
@@ -508,12 +716,19 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 			c.frac_rep = (float)l_repetition / read.len;
 		}
 
-		// Filter poor seeds in chain
-		filter_seed_in_chain(read, chain);
+		// Extend chains to alignments
+		auto region = extend_chain(read, chain);
 
-		kstring_t *d = &debug_out[_start + i];
-		print_chains_to(chain, d);
-		for (auto &c : chain) c.destroy();
+		// Output used variables of regions
+		auto *out= &debug_out[_start + i];
+		ksprintf(out, "Read %d has %ld chains, %ld aligned regions\n", _start + i, chain.size(), region.size());
+		for (const auto &r : region) {
+			ksprintf(out, "[%d,%d) => [%ld,%ld)\n", r.qb, r.qe, r.rb, r.re);
+			ksprintf(out, "SW=%d, BW=%d, Final=%d, SeedCover=%d, Seed0=%d\n",
+				r.local_score, r.band_width, r.true_score, r.seed_cover, r.seed_len0);
+			ksprintf(out, "RID=%d, Freq=%.6f\n", r.rid, r.frac_rep);
+			ksprintf(out, "\n");
+		}
 	}
 }
 

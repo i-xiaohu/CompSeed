@@ -63,7 +63,7 @@ struct sal_request {
 };
 
 /** Chain of co-linear seeds */
-struct seed_chain { // Do not change this unaligned struct; it affects the B-tree order
+struct seed_chain { // Do not change this aligned struct; it affects the B-tree order
 	int64_t anchor; // Anchor or the first seed location
 	int rid; // Chain can't cross multiple chromosomes
 	int first_cover; // Which chain that the current chain first shadows
@@ -122,12 +122,25 @@ struct seed_chain { // Do not change this unaligned struct; it affects the B-tre
 	void destroy() const { free(seeds); }
 };
 
-struct PPPP {
-	int n, m, first, rid;
-	uint32_t w:29, kept:2, is_alt:1;
-	float frac_rep;
-	int64_t pos;
-	seed_hit *seeds;
+struct align_region {
+	int64_t rb, re; // [rb, re) reference sequence in the alignment
+	int qb, qe;     // [qb, qe) query sequence in the alignment
+	int rid;        // Reference sequence ID
+	int local_score;// Best local Smith-Waterman score
+	                // Actual score of the aligned region; could be the best local score
+    int true_score;	// or the global alignment score which is possibly smaller the former
+	int sub_score;  // Suboptimal SW score
+	int alt_score;  //
+	int tandem_sco; // SW score of a tandem hit
+	int sub_n;      // approximate number of suboptimal hits
+	int band_width; // Band width of SW matrix in seed extension
+	int seed_cover; // Length of the aligned region covered by seeds
+	int secondary;  // Point to the parent hit shadowing the current hit; < 0 if primary
+	int second_all; //
+	int seed_len0;  // Length of the staring seed that is extended to this alignment
+	int32_t n_comp:30, is_alt:2; // Number of sub-alignments chained together
+	float frac_rep; // Repetition fraction; equal to of the corresponding chain
+	uint64_t hash;  //
 };
 
 /** How many reads to process at a time. Batch size can impact the performance of compressive aligner.
@@ -197,6 +210,9 @@ public:
 
 	/** Calculate Smith-Waterman score for a seed */
 	int seed_sw_score(const ngs_read &read, const seed_hit &s);
+
+	/** Extend chain to alignment with Smith-Waterman Algorithm */
+	std::vector<align_region> extend_chain(const ngs_read &read, std::vector<seed_chain> &chain);
 
 	/** Align reads from start to end-1 with thread tid. */
 	void seed_and_extend(int start, int end, int tid);

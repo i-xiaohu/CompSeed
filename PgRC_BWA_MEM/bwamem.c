@@ -1077,7 +1077,6 @@ mem_alnreg_v mem_align1_core(const mem_opt_t *opt, const bwt_t *bwt, const bntse
 	chn = mem_chain(opt, bwt, bns, l_seq, (uint8_t*)seq, buf, seq_id);
 	kstring_t *d = &debug_out[seq_id];
 	chn.n = mem_chain_flt(opt, chn.n, chn.a);
-	print_chains_to(bns, &chn, d);
 	mem_flt_chained_seeds(opt, bns, pac, l_seq, (uint8_t*)seq, chn.n, chn.a);
 	if (bwa_verbose >= 4) mem_print_chain(bns, &chn);
 
@@ -1088,6 +1087,17 @@ mem_alnreg_v mem_align1_core(const mem_opt_t *opt, const bwt_t *bwt, const bntse
 		mem_chain2aln(opt, bns, pac, l_seq, (uint8_t*)seq, p, &regs);
 		free(chn.a[i].seeds);
 	}
+	kstring_t *out = &debug_out[seq_id];
+	ksprintf(out, "Read %d has %ld chains, %ld aligned regions\n", seq_id, chn.n, regs.n);
+	for (i = 0; i < regs.n; i++) {
+		mem_alnreg_t r = regs.a[i];
+		ksprintf(out, "[%d,%d) => [%ld,%ld)\n", r.qb, r.qe, r.rb, r.re);
+		ksprintf(out, "SW=%d, BW=%d, Final=%d, SeedCover=%d, Seed0=%d\n",
+		         r.score, r.w, r.truesc, r.seedcov, r.seedlen0);
+		ksprintf(out, "RID=%d, Freq=%.6f\n", r.rid, r.frac_rep);
+		ksprintf(out, "\n");
+	}
+
 	free(chn.a);
 	regs.n = mem_sort_dedup_patch(opt, bns, pac, (uint8_t*)seq, regs.n, regs.a);
 	if (bwa_verbose >= 4) {
