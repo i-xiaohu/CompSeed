@@ -371,8 +371,126 @@ static inline int calc_max_gap(const mem_opt_t *opt, int len) {
 	return std::min(l, opt->w * 2); // Should not exceed two times bandwidth
 }
 
+#ifdef __GNUC__
+#define LIKELY(x) __builtin_expect((x),1)
+#define UNLIKELY(x) __builtin_expect((x),0)
+#else
+#define LIKELY(x) (x)
+#define UNLIKELY(x) (x)
+#endif
+
+int CompAligner::smith_waterman(int qlen, const uint8_t *query, int tlen, const uint8_t *target,
+                                int m, const int8_t *mat, int o_del, int e_del, int o_ins, int e_ins, int w,
+                                int end_bonus,
+                                int zdrop,
+                                int h0,
+                                int *_qle, int *_tle,
+                                int *_gtle, int *_gscore,
+                                int *_max_off,
+                                thread_aux &aux) {
+
+	struct eh_t { int32_t h, e; };
+	eh_t *eh; // score array
+	int8_t *qp; // query profile
+	int i, j, k, oe_del = o_del + e_del, oe_ins = o_ins + e_ins, beg, end, max, max_i, max_j, max_ins, max_del, max_ie, gscore, max_off;
+	assert(h0 > 0);
+	// allocate memory
+	qp = (int8_t*) malloc(qlen * m);
+	eh = (eh_t*) calloc(qlen + 1, 8);
+	// generate the query profile
+	for (k = i = 0; k < m; ++k) {
+		const int8_t *p = &mat[k * m];
+		for (j = 0; j < qlen; ++j) qp[i++] = p[query[j]];
+	}
+	// fill the first row
+	eh[0].h = h0; eh[1].h = h0 > oe_ins? h0 - oe_ins : 0;
+	for (j = 2; j <= qlen && eh[j-1].h > e_ins; ++j)
+		eh[j].h = eh[j-1].h - e_ins;
+	// adjust $w if it is too large
+	k = m * m;
+	for (i = 0, max = 0; i < k; ++i) // get the max score
+		max = max > mat[i]? max : mat[i];
+	max_ins = (int)((double)(qlen * max + end_bonus - o_ins) / e_ins + 1.);
+	max_ins = max_ins > 1? max_ins : 1;
+	w = w < max_ins? w : max_ins;
+	max_del = (int)((double)(qlen * max + end_bonus - o_del) / e_del + 1.);
+	max_del = max_del > 1? max_del : 1;
+	w = w < max_del? w : max_del;
+	// DP loop
+	max = h0, max_i = max_j = -1; max_ie = -1, gscore = -1;
+	max_off = 0;
+	beg = 0, end = qlen;
+	for (i = 0; LIKELY(i < tlen); ++i) {
+		int t, f = 0, h1, m = 0, mj = -1;
+		int8_t *q = &qp[target[i] * qlen];
+		// apply the band and the constraint (if provided)
+		if (beg < i - w) beg = i - w;
+		if (end > i + w + 1) end = i + w + 1;
+		if (end > qlen) end = qlen;
+		// compute the first column
+		if (beg == 0) {
+			h1 = h0 - (o_del + e_del * (i + 1));
+			if (h1 < 0) h1 = 0;
+		} else h1 = 0;
+		for (j = beg; LIKELY(j < end); ++j) {
+			// At the beginning of the loop: eh[j] = { H(i-1,j-1), E(i,j) }, f = F(i,j) and h1 = H(i,j-1)
+			// Similar to SSE2-SW, cells are computed in the following order:
+			//   H(i,j)   = max{H(i-1,j-1)+S(i,j), E(i,j), F(i,j)}
+			//   E(i+1,j) = max{H(i,j)-gapo, E(i,j)} - gape
+			//   F(i,j+1) = max{H(i,j)-gapo, F(i,j)} - gape
+			eh_t *p = &eh[j];
+			int h, M = p->h, e = p->e; // get H(i-1,j-1) and E(i-1,j)
+			p->h = h1;          // set H(i,j-1) for the next row
+			M = M? M + q[j] : 0;// separating H and M to disallow a cigar like "100M3I3D20M"
+			h = M > e? M : e;   // e and f are guaranteed to be non-negative, so h>=0 even if M<0
+			h = h > f? h : f;
+			h1 = h;             // save H(i,j) to h1 for the next column
+			mj = m > h? mj : j; // record the position where max score is achieved
+			m = m > h? m : h;   // m is stored at eh[mj+1]
+			t = M - oe_del;
+			t = t > 0? t : 0;
+			e -= e_del;
+			e = e > t? e : t;   // computed E(i+1,j)
+			p->e = e;           // save E(i+1,j) for the next row
+			t = M - oe_ins;
+			t = t > 0? t : 0;
+			f -= e_ins;
+			f = f > t? f : t;   // computed F(i,j+1)
+		}
+		eh[end].h = h1; eh[end].e = 0;
+		if (j == qlen) {
+			max_ie = gscore > h1? max_ie : i;
+			gscore = gscore > h1? gscore : h1;
+		}
+		if (m == 0) { aux.break_at[i]++; break; }
+		if (m > max) {
+			max = m, max_i = i, max_j = mj;
+			max_off = max_off > abs(mj - i)? max_off : abs(mj - i);
+		} else if (zdrop > 0) {
+			if (i - max_i > mj - max_j) {
+				if (max - m - ((i - max_i) - (mj - max_j)) * e_del > zdrop) break;
+			} else {
+				if (max - m - ((mj - max_j) - (i - max_i)) * e_ins > zdrop) break;
+			}
+		}
+		// update beg and end for the next round
+		for (j = beg; LIKELY(j < end) && eh[j].h == 0 && eh[j].e == 0; ++j);
+		beg = j;
+		for (j = end; LIKELY(j >= beg) && eh[j].h == 0 && eh[j].e == 0; --j);
+		end = j + 2 < qlen? j + 2 : qlen;
+		//beg = 0; end = qlen; // uncomment this line for debugging
+	}
+	free(eh); free(qp);
+	if (_qle) *_qle = max_j + 1;
+	if (_tle) *_tle = max_i + 1;
+	if (_gtle) *_gtle = max_ie + 1;
+	if (_gscore) *_gscore = gscore;
+	if (_max_off) *_max_off = max_off;
+	return max;
+}
+
 std::vector<align_region> CompAligner::
-	extend_chain(const ngs_read &read, std::vector<seed_chain> &chain) {
+	extend_chain(const ngs_read &read, std::vector<seed_chain> &chain, thread_aux &aux) {
 	// Filter poor seeds in chain
 	filter_seed_in_chain(read, chain);
 
@@ -482,7 +600,7 @@ std::vector<align_region> CompAligner::
 				for (int i = 0; i < MAX_BAND_TRY; i++) {
 					int prev_score = a.local_score;
 					actual_bw_left = opt->w << i;
-					a.local_score = ksw_extend2(
+					a.local_score = smith_waterman(
 							que_len, qs, tar_len, ts,
 							5, opt->mat, opt->o_del, opt->e_del, opt->o_ins, opt->e_ins,
 							actual_bw_left,
@@ -491,7 +609,7 @@ std::vector<align_region> CompAligner::
 							s.len * opt->a,
 							&local_que_ext, &local_tar_ext,
 							&global_tar_ext, &global_score,
-							&max_off);
+							&max_off, aux);
 					// Stop increasing the bandwidth if the DP score does not change or
 					// maximum offsetting diagonal distance < 75% of the applied bandwidth
 					if (a.local_score == prev_score or max_off < actual_bw_left / 2 + actual_bw_left / 4) break;
@@ -526,7 +644,7 @@ std::vector<align_region> CompAligner::
 				for (int i = 0; i < MAX_BAND_TRY; i++) {
 					int prev_score = a.local_score;
 					actual_bw_right = opt->w << i;
-					a.local_score = ksw_extend2(
+					a.local_score = smith_waterman(
 							que_len, (uint8_t*)read.bases + (s.qbeg + s.len),
 							tar_len, ref_seq + (s.rbeg + s.len) - span_l,
 							5, opt->mat, opt->o_del, opt->e_del, opt->o_ins, opt->e_ins,
@@ -536,7 +654,7 @@ std::vector<align_region> CompAligner::
 							score0,
 							&local_que_ext, &local_tar_ext,
 							&global_tar_ext, &global_score,
-							&max_off);
+							&max_off, aux);
 					if (a.local_score == prev_score or max_off < actual_bw_right / 2 + actual_bw_right / 4) break;
 				}
 				if (global_score > 0 and global_score > a.local_score - opt->pen_clip3) {
@@ -581,6 +699,15 @@ void CompAligner::display_profile() {
 	fprintf(stderr, "Input %d reads in total\n", total_reads_count);
 	fprintf(stderr, "Perfect Matched Reads: %d (%.2f %%)\n", full_read_match, 100.0 * full_read_match / total_reads_count);
 	fprintf(stderr, "Reads go shortcut:     %d (%.2f %%)\n", shortcut, 100.0 * shortcut / total_reads_count);
+	long sum = 0; for (auto x : total.break_at) sum += x;
+	long acc = 0;
+	for (int i = 0; i < 256; i++) {
+		if (total.break_at[i] > 0) {
+			acc += total.break_at[i];
+			fprintf(stderr, "Break at %d, Acc Count %ld, Acc Fraction %.2f\n",
+		        i, acc, 1.0 * acc / sum);
+		}
+	}
 }
 
 void CompAligner::seed_and_extend(int _start, int _end, int tid) {
@@ -717,18 +844,7 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 		}
 
 		// Extend chains to alignments
-		auto region = extend_chain(read, chain);
-
-		// Output used variables of regions
-		auto *out= &debug_out[_start + i];
-		ksprintf(out, "Read %d has %ld chains, %ld aligned regions\n", _start + i, chain.size(), region.size());
-		for (const auto &r : region) {
-			ksprintf(out, "[%d,%d) => [%ld,%ld)\n", r.qb, r.qe, r.rb, r.re);
-			ksprintf(out, "SW=%d, BW=%d, Final=%d, SeedCover=%d, Seed0=%d\n",
-				r.local_score, r.band_width, r.true_score, r.seed_cover, r.seed_len0);
-			ksprintf(out, "RID=%d, Freq=%.6f\n", r.rid, r.frac_rep);
-			ksprintf(out, "\n");
-		}
+		auto region = extend_chain(read, chain, aux);
 	}
 }
 
@@ -768,7 +884,7 @@ void CompAligner::run(const char *fn) {
 			for (auto &r : reads) { free(r.bases); free(r.sam); }
 			fprintf(stderr, "Seed and Extend: %d reads processed\n", total_reads_count);
 			for (int i = 0; i < reads.size(); i++) {
-				fprintf(stdout, "%s\n", debug_out[i].s);
+//				fprintf(stdout, "%s\n", debug_out[i].s);
 				free(debug_out[i].s);
 			}
 			free(debug_out);

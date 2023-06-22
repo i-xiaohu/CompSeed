@@ -148,7 +148,7 @@ struct align_region {
  * Lowering batch size could not make good use of benefits provided by compressors. */
 #define BATCH_SIZE 512
 
-/** Auxiliary for each thread, maintaining essential buffers for alingment */
+/** Auxiliary for each thread, maintaining essential buffers for alignment */
 struct thread_aux {
 	SST *forward_sst = nullptr; // Forward SST caching BWT forward extension
 	SST *backward_sst = nullptr; // Backward SST caching BWT backward extension
@@ -162,9 +162,13 @@ struct thread_aux {
 	long sal_times = 0;
 	int full_read_match = 0; // Number of full-length matched reads
 	int shortcut = 0; // Number of reads that are full-length matched and avoid regular SMEM search
+	long break_at[256] = {0};
 	void operator += (const thread_aux &a) {
 		full_read_match += a.full_read_match;
 		shortcut += a.shortcut;
+		for (int i = 0; i < 256; i++) {
+			break_at[i] += a.break_at[i];
+		}
 	}
 };
 
@@ -212,7 +216,17 @@ public:
 	int seed_sw_score(const ngs_read &read, const seed_hit &s);
 
 	/** Extend chain to alignment with Smith-Waterman Algorithm */
-	std::vector<align_region> extend_chain(const ngs_read &read, std::vector<seed_chain> &chain);
+	std::vector<align_region> extend_chain(const ngs_read &read,
+			std::vector<seed_chain> &chain, thread_aux &aux);
+
+	int smith_waterman(int qlen, const uint8_t *query, int tlen, const uint8_t *target,
+					int m, const int8_t *mat, int o_del, int e_del, int o_ins, int e_ins, int w,
+					int end_bonus,
+					int zdrop,
+					int h0,
+					int *_qle, int *_tle,
+					int *_gtle, int *_gscore,
+					int *_max_off, thread_aux &aux);
 
 	/** Align reads from start to end-1 with thread tid. */
 	void seed_and_extend(int start, int end, int tid);
