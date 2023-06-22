@@ -2,8 +2,8 @@
 // Created by ixiaohu on 2023/6/8.
 //
 
-#ifndef PGRC_LEARN_SST_H
-#define PGRC_LEARN_SST_H
+#ifndef COMP_SEED_SST_H
+#define COMP_SEED_SST_H
 
 #include "../FM_index/bwt.h"
 #include <vector>
@@ -153,4 +153,4 @@ int SST::query_child(int parent, uint8_t base, bool is_back) {
 	return nodes[parent].children[base];
 }
 
-#endif //PGRC_LEARN_SST_H
+#endif //COMP_SEED_SST_H

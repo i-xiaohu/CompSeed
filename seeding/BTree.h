@@ -2,8 +2,8 @@
 // Created by ixiaohu on 2023/6/2.
 //
 
-#ifndef PGRC_LEARN_BTREE_H
-#define PGRC_LEARN_BTREE_H
+#ifndef COMP_SEED_BTREE_H
+#define COMP_SEED_BTREE_H
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -232,4 +232,4 @@ public:
 	void destroy() { destroy_recursion(root); }
 };
 
-#endif //PGRC_LEARN_BTREE_H
+#endif //COMP_SEED_BTREE_H
