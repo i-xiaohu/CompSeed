@@ -7,7 +7,6 @@
 
 #include <string>
 #include <vector>
-#include "../PseudoGenome/SeparatedPG.h"
 #include "../bwalib/bwa.h"
 #include "../cstl/kvec.h"
 #include "../cstl/kstring.h"
@@ -22,18 +21,6 @@ static inline unsigned long long __rdtsc(void) {
 	return ( (unsigned long long)lo)|( ((unsigned long long)hi)<<32 );
 }
 #endif
-
-struct time_record {
-	uint64_t seeding, reseed, third, sal, total;
-	time_record(): seeding(0), reseed(0), third(0), sal(0), total(0) {}
-	void operator += (const time_record &t) {
-		seeding += t.seeding;
-		reseed += t.reseed;
-		third += t.third;
-		sal += t.sal;
-		total += t.total;
-	}
-};
 
 /** Storing decompressed NGS reads */
 struct ngs_read {
@@ -148,6 +135,11 @@ struct align_region {
  * Lowering batch size could not make good use of benefits provided by compressors. */
 #define BATCH_SIZE 512
 
+/** Auxiliary of BWA-MEM seeding */
+typedef struct {
+	bwtintv_v mem, mem1, *tmpv[2];
+} smem_aux_t;
+
 /** Auxiliary for each thread, maintaining essential buffers for alignment */
 struct thread_aux {
 	SST *forward_sst = nullptr; // Forward SST caching BWT forward extension
@@ -157,50 +149,53 @@ struct thread_aux {
 	std::vector<bwtintv_t> match[BATCH_SIZE]; // Exact matches for each read (minimum seed length guaranteed)
 	std::vector<sal_request> unique_sal; // Sorted suffix array hit locations for merging SAL operations
 	std::vector<seed_hit> seed[BATCH_SIZE]; // Seed hits for each read
+	smem_aux_t *mem_aux; // For BWA-MEM seeding
 
 	// Profiling time cost and calls number for BWT extension and SAL
-	long sal_times = 0;
+	long sal_call_times = 0;
+	long bwt_call_times = 0;
+	double seeding_cpu_sec = 0;
+
 	int full_read_match = 0; // Number of full-length matched reads
 	int shortcut = 0; // Number of reads that are full-length matched and avoid regular SMEM search
-	long break_at[256] = {0};
 	void operator += (const thread_aux &a) {
 		full_read_match += a.full_read_match;
 		shortcut += a.shortcut;
-		for (int i = 0; i < 256; i++) {
-			break_at[i] += a.break_at[i];
-		}
+		sal_call_times += a.sal_call_times;
+		bwt_call_times += a.bwt_call_times;
+		seeding_cpu_sec += a.seeding_cpu_sec;
 	}
 };
 
 class CompAligner {
 private:
+	// FM-index
 	bwaidx_t *bwa_idx = nullptr;
 	bntseq_t *bns = nullptr;
 	bwt_t *bwt = nullptr;
 	uint8_t *pac = nullptr;
-	mem_opt_t *opt = nullptr;
+
+	// Working threads
+	int threads_n = 1;
 	thread_aux *thr_aux = nullptr;
 
-	int total_reads_count = 0;
-	int chunk_size = 5 * 1000 * 1000; // Chunk size for each thread; total input size = #theads * chunk size
+	int read_length = 0;
+	long processed_n = 0;
 	std::vector<ngs_read> reads; // Reads input from compressed file
 
-	uint64_t cpu_frequency = 1;
-	inline double _time(uint64_t x) { return 1.0 * x / cpu_frequency; }
+	kstring_t *debug_out = nullptr; // Debug information output to stdout
 
 public:
-	CompAligner();
-
 	void load_index(const char *fn);
 
-	int threads_n = 1; // Working thread number
-	int input_round_limit = 1; // Input round limit for testing
-	kstring_t *debug_out = nullptr; // Debug information output to stdout
+	mem_opt_t *opt = nullptr; // BWA-MEM built-in parameters
+	bool print_seed = false; // Print all seeds to stdout for validation
+	int actual_chunk_size = 0; // Size of each input
 
 	/** Compressed super-mem1 algorithm with SST; used for seeding and re-seeding. */
 	static int collect_mem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux &aux);
 
-	int tem_forward_sst(const uint8_t *seq, int len, int start, bwtintv_t *mem, thread_aux &aux);
+	int tem_forward_sst(const uint8_t *seq, int len, int start, bwtintv_t *mem, thread_aux &aux) const;
 
 	/** Chaining seeds and filtering out light-weight chains and seeds. */
 	std::vector<seed_chain> chaining(const std::vector<seed_hit> &seed);
@@ -228,12 +223,16 @@ public:
 					int *_gtle, int *_gscore,
 					int *_max_off, thread_aux &aux);
 
-	/** Align reads from start to end-1 with thread tid. */
+	/** Restoring offset and corrected strand for reordered reads. */
+
+	/** Align reads from start to end-1 with thread tid. (So far, only run seeding) */
 	void seed_and_extend(int start, int end, int tid);
 
 	void display_profile();
 
 	void run(const char *fn);
+
+	void bwa_collect_seed(int seq_id, int tid);
 
 	void bwamem(const char *fn);
 };
