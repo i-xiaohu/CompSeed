@@ -34,8 +34,12 @@ set(BWA_Package ${cstl} ${FM_index} ${bwalib})
 add_executable(bwaidx ${BWA_Package} FM_index/index_main.c)
 target_link_libraries(bwaidx -lz -lrt -lpthread)
 
-add_executable(${EXE} ${BWA_Package}
+set(seeding
         seeding/comp_seeding.cpp seeding/comp_seeding.h
-        seeding/bwamem.h seeding/bwamem.c
-        seeding/bwamem_extra.c seeding/bwamem_pair.c)
+        seeding/SST.cpp seeding/SST.h
+        seeding/bwamem.c seeding/bwamem.h
+        seeding/bwamem_extra.c
+        seeding/bwamem_pair.c)
+
+add_executable(${EXE} ${BWA_Package} ${seeding} main.cpp)
 target_link_libraries(${EXE} -lm -lz -lrt -lpthread)
