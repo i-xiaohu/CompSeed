@@ -7,8 +7,8 @@
 #include "seeding/comp_seeding.h"
 
 static void print_usage(const mem_opt_t *opt) {
-	fprintf(stderr, "This program implements the compressive version of BWA-MEM seeding, and benchmarks the speedup\n");
-	fprintf(stderr, "over BWA-MEM seeding under different compressors, including SPRING, Minicom and PgRC.\n");
+	fprintf(stderr, "This program implements the compressive version of BWA-MEM seeding, and benchmarks the speedup over\n");
+	fprintf(stderr, "BWA-MEM seeding under different compressors, including SPRING, Minicom and PgRC.\n");
 	fprintf(stderr, "Usage: comp_seed [options] <FM-index> <Reordered Reads>\n");
 	fprintf(stderr, "comp_seed supports all built-in parameters of BWA-MEM seeding and generates identical seeds with BWA-MEM.\n");
 	fprintf(stderr, "    -t INT        number of threads [%d]\n", opt->n_threads);
@@ -16,12 +16,12 @@ static void print_usage(const mem_opt_t *opt) {
 	fprintf(stderr, "    -r FLOAT      look for internal seeds inside a seed longer than {-k} * FLOAT [%g]\n", opt->split_factor);
 	fprintf(stderr, "    -y INT        seed occurrence for the 3rd round seeding [%ld]\n", (long)opt->max_mem_intv);
 	fprintf(stderr, "    -c INT        skip seeds with more than INT occurrences [%d]\n", opt->max_occ);
-	fprintf(stderr, "    -K INT        process INT input bases in each batch regardless of nThreads (for reproducibility) []\n");
+	fprintf(stderr, "    -K INT        process INT input bases in each batch regardless of nThreads (for reproducibility)\n");
 	fprintf(stderr, "Use option --bwa or --comp to specify the original or compressive seeding algorithm.\n");
-	fprintf(stderr, "Use option --print to print all seeds to stdout. The output is in text mode, where a seed structure contains\n"
-				    "start positions on query and reference sequence and the seed length. It allows the validation whether comp_seed\n"
-					"produce identical seeds with BWA-MEM.\n");
-	fprintf(stderr, "comp_seed takes the decompressed/reordered reads as input, not directly supporting compression format yet\n");
+	fprintf(stderr, "Use option --print to print all seeds to stdout. The output is in text mode, where a seed structure\n"
+				    "contains start positions on query and reference sequence and the seed length. It allows the validation\n"
+					"whether comp_seed produce identical seeds with BWA-MEM.\n");
+	fprintf(stderr, "comp_seed takes the decompressed/reordered reads as input, not directly supporting compression format yet.\n");
 }
 
 int main(int argc, char *argv[]) {
