@@ -36,10 +36,7 @@ target_link_libraries(bwaidx -lz -lrt -lpthread)
 
 set(seeding
         seeding/comp_seeding.cpp seeding/comp_seeding.h
-        seeding/SST.cpp seeding/SST.h
-        seeding/bwamem.c seeding/bwamem.h
-        seeding/bwamem_extra.c
-        seeding/bwamem_pair.c)
+        seeding/SST.cpp seeding/SST.h)
 
 add_executable(${EXE} ${BWA_Package} ${seeding} main.cpp)
 target_link_libraries(${EXE} -lm -lz -lrt -lpthread)

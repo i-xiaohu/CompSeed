@@ -894,6 +894,44 @@ void CompAligner::run(const char *fn) {
  * Bookmark 4: BWA-MEM Seeding  *
  ********************************/
 
+mem_opt_t *mem_opt_init()
+{
+	mem_opt_t *o;
+	o = (mem_opt_t*) calloc(1, sizeof(mem_opt_t));
+	o->flag = 0;
+	o->a = 1; o->b = 4;
+	o->o_del = o->o_ins = 6;
+	o->e_del = o->e_ins = 1;
+	o->w = 100;
+	o->T = 30;
+	o->zdrop = 100;
+	o->pen_unpaired = 17;
+	o->pen_clip5 = o->pen_clip3 = 5;
+
+	o->max_mem_intv = 20;
+
+	o->min_seed_len = 19;
+	o->split_width = 10;
+	o->max_occ = 500;
+	o->max_chain_gap = 10000;
+	o->max_ins = 10000;
+	o->mask_level = 0.50;
+	o->drop_ratio = 0.50;
+	o->XA_drop_ratio = 0.80;
+	o->split_factor = 1.5;
+	o->chunk_size = 10000000;
+	o->n_threads = 1;
+	o->max_XA_hits = 5;
+	o->max_XA_hits_alt = 200;
+	o->max_matesw = 50;
+	o->mask_level_redun = 0.95;
+	o->min_chain_weight = 0;
+	o->max_chain_extend = 1<<30;
+	o->mapQ_coef_len = 50; o->mapQ_coef_fac = log(o->mapQ_coef_len);
+	bwa_fill_scmat(o->a, o->b, o->mat);
+	return o;
+}
+
 smem_aux_t *smem_aux_init() {
 	smem_aux_t *a;
 	a = (smem_aux_t*) calloc(1, sizeof(smem_aux_t));
