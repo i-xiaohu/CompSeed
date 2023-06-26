@@ -16,6 +16,8 @@
 #include "../cstl/ksort.h"
 #include "../bwalib/utils.h"
 
+//static time_profile t_prof[1024];
+
 /********************************
  * Bookmark 1: Seeding with SST *
  ********************************/
@@ -685,9 +687,7 @@ std::vector<align_region> CompAligner::
 	return regions;
 }
 
-void CompAligner::display_profile() {
-	thread_aux total;
-	for (int i = 0; i < threads_n; i++) total += thr_aux[i];
+void CompAligner::display_profile(const thread_aux &total) {
 	auto full_read_match = total.full_read_match;
 	auto shortcut = total.shortcut;
 	fprintf(stderr, "Input reads in total:  %ld\n", processed_n);
@@ -755,7 +755,7 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 			}
 			ref_position = read.offset;
 		}
-		aux.full_read_match += (match.size() == 1 and mem_len(match[0]) == read.len);
+		thr_aux[tid].full_read_match += (match.size() == 1 and mem_len(match[0]) == read.len);
 
 		int old_n = (int)match.size();
 		for (int j = 0; j < old_n; j++) {
@@ -831,6 +831,7 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 void CompAligner::run(const char *fn) {
 	// Prepare for thread auxiliary
 	threads_n = opt->n_threads;
+	thread_aux total;
 
 	fprintf(stderr, "Running compressive seeding...\n");
 	gzFile in = gzopen(fn, "r"); assert(in != nullptr);
@@ -853,13 +854,14 @@ void CompAligner::run(const char *fn) {
 
 		// Processing (I/O thread not supported yet)
 		if (print_seed) debug_out = (kstring_t*) calloc(reads.size(), sizeof(kstring_t));
-		double cpu_start = cputime();
 		thr_aux = new thread_aux[threads_n];
 		for (int i = 0; i < threads_n; i++) {
 			auto &a = thr_aux[i];
 			a.forward_sst = new SST(bwa_idx->bwt);
 			a.backward_sst = new SST(bwa_idx->bwt);
 		}
+
+		double cpu_start = cputime();
 		kt_for(
 				threads_n,
 				[](void *d, long i, int t) -> void {
@@ -868,13 +870,15 @@ void CompAligner::run(const char *fn) {
 				this,
 				((int)reads.size() + BATCH_SIZE - 1) / BATCH_SIZE
 		);
+		thr_aux[0].seeding_cpu_sec += cputime() - cpu_start;
+
+		for (int i = 0; i < threads_n; i++) total += thr_aux[i];
 		for (int i = 0; i < threads_n; i++) {
 			auto &a = thr_aux[i];
 			delete a.forward_sst;
 			delete a.backward_sst;
 		}
 		delete [] thr_aux;
-		thr_aux[0].seeding_cpu_sec += cputime() - cpu_start;
 		for (auto &r : reads) { free(r.bases); free(r.sam); }
 		if (print_seed) {
 			for (int i = 0; i < reads.size(); i++) {
@@ -886,7 +890,7 @@ void CompAligner::run(const char *fn) {
 		processed_n += reads.size();
 		fprintf(stderr, "%ld reads processed\n", processed_n);
 	}
-//	display_profile();
+	display_profile(total);
 
 	bwa_idx_destroy(bwa_idx);
 	gzclose(in);
@@ -940,6 +944,10 @@ smem_aux_t *smem_aux_init() {
 	a = (smem_aux_t*) calloc(1, sizeof(smem_aux_t));
 	a->tmpv[0] = (bwtintv_v*) calloc(1, sizeof(bwtintv_v));
 	a->tmpv[1] = (bwtintv_v*) calloc(1, sizeof(bwtintv_v));
+	kv_resize(bwtintv_t, a->mem, 512);
+	kv_resize(bwtintv_t, a->mem1, 512);
+	kv_resize(bwtintv_t, *a->tmpv[0], 512);
+	kv_resize(bwtintv_t, *a->tmpv[1], 512);
 	return a;
 }
 
@@ -1017,7 +1025,7 @@ void CompAligner::bwa_collect_seed(int seq_id, int tid) {
 			break;
 		}
 	}
-	auto &seed = thr_aux[tid].seed[0]; seed.clear();
+//	auto &seed = thr_aux[tid].seed[0]; seed.clear();
 	for (int i = 0; i < aux->mem.n; i++) {
 		const auto &p = aux->mem.a[i];
 		int slen = mem_len(p); // seed length
@@ -1028,18 +1036,18 @@ void CompAligner::bwa_collect_seed(int seq_id, int tid) {
 			s.qbeg = mem_beg(p);
 			s.score= s.len = slen;
 			s.rid = bns_intv2rid(bns, s.rbeg, s.rbeg + s.len);
-			seed.push_back(s);
-		}
-	}
-
-	if (print_seed) {
-		kstring_t *o = &debug_out[seq_id];
-		ksprintf(o, "Read %ld, Seed %ld\n", processed_n + seq_id, seed.size());
-		for (int j = 0; j < seed.size(); j++) {
-			ksprintf(o, "%d:{%d, %ld, %d}\n", j+1, seed[j].qbeg, seed[j].rbeg, seed[j].len);
+//			seed.push_back(s);
 		}
 	}
 	smem_aux_destroy(aux);
+
+	if (print_seed) {
+		kstring_t *o = &debug_out[seq_id];
+//		ksprintf(o, "Read %ld, Seed %ld\n", processed_n + seq_id, seed.size());
+//		for (int j = 0; j < seed.size(); j++) {
+//			ksprintf(o, "%d:{%d, %ld, %d}\n", j+1, seed[j].qbeg, seed[j].rbeg, seed[j].len);
+//		}
+	}
 	thr_aux[tid].seeding_real_sec += realtime() - real_start;
 }
 
@@ -1047,7 +1055,7 @@ void CompAligner::bwamem(const char *fn) {
 	fprintf(stderr, "Running BWA-MEM seeding\n");
 	// Prepare for thread auxiliary
 	threads_n = opt->n_threads;
-	thr_aux = new thread_aux[threads_n];
+	thread_aux total;
 
 	gzFile in = gzopen(fn, "r"); assert(in != nullptr);
 	char *buffer = new char[1024]; memset(buffer, 0, 1024 * sizeof(char));
@@ -1069,9 +1077,10 @@ void CompAligner::bwamem(const char *fn) {
 
 		// Processing (I/O thread not supported yet)
 		if (print_seed) debug_out = (kstring_t*) calloc(reads.size(), sizeof(kstring_t));
+		thr_aux = new thread_aux[threads_n];
+		for (int i = 0; i < threads_n; i++) thr_aux[i].mem_aux = smem_aux_init();
+
 		double cpu_start = cputime();
-		mem_aux = (smem_aux_t**) malloc(threads_n * sizeof(smem_aux_t*));
-		for (int i = 0; i < threads_n; i++) mem_aux[i] = smem_aux_init();
 		kt_for(
 				threads_n,
 				[](void *d, long i, int t) -> void {
@@ -1080,9 +1089,11 @@ void CompAligner::bwamem(const char *fn) {
 				this,
 				(int)reads.size()
 		);
-		for (int i = 0; i < threads_n; i++) smem_aux_destroy(mem_aux[i]);
-		free(mem_aux);
 		thr_aux[0].seeding_cpu_sec += cputime() - cpu_start;
+
+		for (int i = 0; i < threads_n; i++) total += thr_aux[i];
+		for (int i = 0; i < threads_n; i++) smem_aux_destroy(thr_aux[i].mem_aux);
+		delete [] thr_aux;
 		for (auto &r : reads) { free(r.bases); free(r.sam); }
 		if (print_seed) {
 			for (int i = 0; i < reads.size(); i++) {
@@ -1094,10 +1105,98 @@ void CompAligner::bwamem(const char *fn) {
 		processed_n += reads.size();
 		fprintf(stderr, "%ld reads processed\n", processed_n);
 	}
-	display_profile();
+	display_profile(total);
 
 	bwa_idx_destroy(bwa_idx);
-	delete [] thr_aux;
+	gzclose(in);
+	delete [] buffer;
+}
+
+struct worker {
+	const mem_opt_t *opt;
+	const bwt_t *bwt;
+	const bntseq_t *bns;
+	const uint8_t *pac;
+	smem_aux_t **aux;
+	ngs_read *seqs;
+};
+
+void bwa_worker(void *data, long seq_id, int tid) {
+	auto *w = (worker*) data;
+	const auto *opt = w->opt;
+	const auto *bwt = w->bwt;
+	const auto *bns = w->bns;
+	const auto *pac = w->pac;
+	const auto &read = w->seqs[seq_id];
+	for (int i = 0; i < read.len; i++) {
+		if (read.bases[i] > 4) {
+			read.bases[i] = nst_nt4_table[read.bases[i]];
+		}
+	}
+	auto *aux = w->aux[tid];
+	mem_collect_intv(opt, bwt, read.len, (const uint8_t*) read.bases, aux);
+	for (int i = 0; i < aux->mem.n; i++) {
+		const auto &p = aux->mem.a[i];
+		int slen = mem_len(p); // seed length
+		int64_t step = p.x[2] > opt->max_occ? p.x[2] / opt->max_occ : 1;
+		for (int64_t k = 0, count = 0; k < p.x[2] && count < opt->max_occ; k += step, ++count) {
+			seed_hit s = {0};
+			s.rbeg = bwt_sa(bwt, p.x[0] + k); // this is the base coordinate in the forward-reverse reference
+			s.qbeg = mem_beg(p);
+			s.score= s.len = slen;
+			s.rid = bns_intv2rid(bns, s.rbeg, s.rbeg + s.len);
+		}
+	}
+}
+
+void bwa_c_style(const char *index_fn, const char *read_fn, int actual_chunk_size, const mem_opt_t *opt) {
+	fprintf(stderr, "Running BWA-MEM seeding in C style\n");
+	bwaidx_t *idx = bwa_idx_load(index_fn, BWA_IDX_ALL);
+	gzFile in = gzopen(read_fn, "r"); assert(in != nullptr);
+	char *buffer = new char[1024]; memset(buffer, 0, 1024 * sizeof(char));
+	double total_cpu_time = 0;
+	long processed_n = 0;
+	while (true) {
+		// Input a batch of data
+		long bytes = 0;
+		std::vector<ngs_read> reads;
+		while (gzgets(in, buffer, 1024)) {
+			int len = strlen(buffer); buffer[--len] = '\0';
+			ngs_read read1;
+			read1.bases = strdup(buffer);
+			read1.len = len;
+			reads.push_back(read1);
+			bytes += read1.len;
+			if (bytes >= actual_chunk_size) break;
+		}
+		if (reads.empty()) break; // End Of File
+
+		worker w = {};
+		w.opt = opt;
+		w.bwt = idx->bwt;
+		w.bns = idx->bns;
+		w.pac = idx->pac;
+		w.seqs = reads.data();
+		w.aux = (smem_aux_t**) malloc(opt->n_threads * sizeof(smem_aux_t*));
+		for (int i = 0; i < opt->n_threads; i++) w.aux[i] = smem_aux_init();
+
+		double cpu_start = cputime();
+		kt_for(
+				opt->n_threads,
+				bwa_worker,
+				&w,
+				(int)reads.size()
+		);
+		total_cpu_time += cputime() - cpu_start;
+
+		for (int i = 0; i < opt->n_threads; i++) smem_aux_destroy(w.aux[i]); free(w.aux);
+		for (auto &r : reads) { free(r.bases); free(r.sam); }
+		processed_n += reads.size();
+		fprintf(stderr, "%ld reads processed\n", processed_n);
+	}
+	fprintf(stderr, "Seeding cost %.2f CPU seconds\n", total_cpu_time);
+
+	bwa_idx_destroy(idx);
 	gzclose(in);
 	delete [] buffer;
 }

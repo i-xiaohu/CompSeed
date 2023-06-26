@@ -59,7 +59,8 @@ int main(int argc, char *argv[]) {
 	worker.actual_chunk_size = fixed_chunk_size == 0 ?opt->n_threads * opt->chunk_size :fixed_chunk_size;
 	worker.load_index(argv[optind]);
 	if (mode == "comp") worker.run(argv[optind + 1]);
-	else worker.bwamem(argv[optind + 1]);
+//	else worker.bwamem(argv[optind + 1]);
+	else bwa_c_style(argv[optind], argv[optind + 1], worker.actual_chunk_size, opt);
 	free(opt);
 	return 0;
 }
