@@ -1,9 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(comp_seed)
 
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O3")
-set(EXE "comp_seed")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O2")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O2")
 
 set(cstl
         cstl/kvec.h
@@ -30,13 +29,14 @@ set(bwalib
         bwalib/ksw.c bwalib/ksw.h
         bwalib/utils.c bwalib/utils.h)
 
-set(BWA_Package ${cstl} ${FM_index} ${bwalib})
-add_executable(bwaidx ${BWA_Package} FM_index/index_main.c)
-target_link_libraries(bwaidx -lz -lrt -lpthread)
+add_executable(bwaidx ${FM_index} ${bwalib} FM_index/index_main.c)
+target_link_libraries(bwaidx -lz -lrt)
 
-set(seeding
+add_executable(bwamem_seeding ${cstl} ${FM_index} ${bwalib} seeding/bwa_seeding.c)
+target_link_libraries(bwamem_seeding -lm -lz -lpthread -lrt)
+
+add_executable(comp_seeding ${cstl} ${FM_index} ${bwalib}
         seeding/comp_seeding.cpp seeding/comp_seeding.h
-        seeding/SST.cpp seeding/SST.h)
-
-add_executable(${EXE} ${BWA_Package} ${seeding} main.cpp)
-target_link_libraries(${EXE} -lm -lz -lrt -lpthread)
+        seeding/SST.cpp seeding/SST.cpp
+        main.cpp)
+target_link_libraries(comp_seeding -lm -lz -lpthread -lrt)
