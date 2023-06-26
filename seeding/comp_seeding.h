@@ -258,12 +258,6 @@ public:
 	void display_profile(const thread_aux &total);
 
 	void run(const char *fn);
-
-	void bwa_collect_seed(int seq_id, int tid);
-
-	void bwamem(const char *fn);
 };
-
-void bwa_c_style(const char *index_fn, const char *read_fn, int actual_chunk_size, const mem_opt_t *opt);
 
 #endif //COMP_SEED_COMP_SEEDING_H

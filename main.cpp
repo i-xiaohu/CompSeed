@@ -29,20 +29,15 @@ int main(int argc, char *argv[]) {
 	if (argc == 1) { print_usage(opt); free(opt); return 1; }
 
 	struct option long_opts[]  = {
-		{"bwa", no_argument, nullptr, 1},
-		{"comp", no_argument, nullptr, 2},
 		{"print", no_argument, nullptr, 3}
 	};
 	const char short_opts[] = "t:k:r:y:c:K:";
 	CompAligner worker;
 	int fixed_chunk_size = 0;
-	std::string mode = "comp";
 	while (true) {
 		int index_ptr, c;
 		c = getopt_long(argc, argv, short_opts, long_opts, &index_ptr);
 		if (c < 0) break;
-		if (c == 1) mode = "bwa";
-		else if (c == 2) mode = "comp";
 		else if (c == 3) worker.print_seed = true;
 		else if (c == 't') opt->n_threads = strtol(optarg, nullptr, 10);
 		else if (c == 'k') opt->min_seed_len = strtol(optarg, nullptr, 10);
@@ -58,9 +53,7 @@ int main(int argc, char *argv[]) {
 	worker.opt = opt;
 	worker.actual_chunk_size = fixed_chunk_size == 0 ?opt->n_threads * opt->chunk_size :fixed_chunk_size;
 	worker.load_index(argv[optind]);
-	if (mode == "comp") worker.run(argv[optind + 1]);
-//	else worker.bwamem(argv[optind + 1]);
-	else bwa_c_style(argv[optind], argv[optind + 1], worker.actual_chunk_size, opt);
+	worker.run(argv[optind + 1]);
 	free(opt);
 	return 0;
 }
