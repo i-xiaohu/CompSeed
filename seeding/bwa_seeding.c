@@ -199,9 +199,9 @@ typedef kvec_t(bseq1_t) bseq1_v;
 
 void bwa_c_style(const char *index_fn, const char *read_fn, int actual_chunk_size, const mem_opt_t *opt) {
 	fprintf(stderr, "Running BWA-MEM seeding implemented by C\n");
-	bwaidx_t *idx = bwa_idx_load(index_fn, BWA_IDX_ALL);
+	bwaidx_t *idx = bwa_idx_load(index_fn, BWA_IDX_ALL); assert(idx != NULL);
 	gzFile in = gzopen(read_fn, "r"); assert(in != NULL);
-	char *buffer = (char*) calloc(1024, sizeof(char ));
+	char *buffer = (char*) calloc(1024, sizeof(char));
 	double total_cpu_time = 0;
 	long processed_n = 0;
 	while (1) {
@@ -209,7 +209,7 @@ void bwa_c_style(const char *index_fn, const char *read_fn, int actual_chunk_siz
 		long bytes = 0;
 		bseq1_v seqs; kv_init(seqs);
 		while (gzgets(in, buffer, 1024)) {
-			int len = strlen(buffer); buffer[--len] = '\0';
+			int len = (int)strlen(buffer); buffer[--len] = '\0';
 			bseq1_t b;
 			b.seq = strdup(buffer);
 			b.l_seq = len;
@@ -249,9 +249,19 @@ void bwa_c_style(const char *index_fn, const char *read_fn, int actual_chunk_siz
 	free(buffer);
 }
 
+static void print_usage(const mem_opt_t *opt) {
+	fprintf(stderr, "Usage: bwamem_seeding [options] <FM-index> <Reordered Reads>\n");
+	fprintf(stderr, "    -t INT        number of threads [%d]\n", opt->n_threads);
+	fprintf(stderr, "    -k INT        minimum seed length [%d]\n", opt->min_seed_len);
+	fprintf(stderr, "    -r FLOAT      look for internal seeds inside a seed longer than {-k} * FLOAT [%g]\n", opt->split_factor);
+	fprintf(stderr, "    -y INT        seed occurrence for the 3rd round seeding [%ld]\n", (long)opt->max_mem_intv);
+	fprintf(stderr, "    -c INT        skip seeds with more than INT occurrences [%d]\n", opt->max_occ);
+	fprintf(stderr, "    -K INT        process INT input bases in each batch regardless of nThreads (for reproducibility)\n");
+}
 
 int main(int argc, char *argv[]) {
 	mem_opt_t *opt = mem_opt_init();
+	if (argc == 1) { print_usage(opt); free(opt); return 1; }
 
 	const char short_opts[] = "t:k:r:y:c:K:";
 	int fixed_chunk_size = 0;
