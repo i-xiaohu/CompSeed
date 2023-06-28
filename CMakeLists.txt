@@ -40,6 +40,3 @@ add_executable(comp_seeding ${cstl} ${FM_index} ${bwalib}
         seeding/SST.cpp seeding/SST.cpp
         main.cpp)
 target_link_libraries(comp_seeding -lm -lz -lpthread -lrt)
-
-add_executable(tmp_seed ${cstl} ${FM_index} ${bwalib} seeding/tmp_comp_seed.c)
-target_link_libraries(tmp_seed -lm -lz -lpthread -lrt)
