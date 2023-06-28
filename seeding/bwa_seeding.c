@@ -178,7 +178,7 @@ void bwa_worker(void *data, long seq_id, int tid) {
 			b->seq[i] = nst_nt4_table[b->seq[i]];
 		}
 	}
-	smem_aux_t *aux = smem_aux_init();
+	smem_aux_t *aux = w->aux[tid];
 	mem_collect_intv(w->opt, w->bwt, b->l_seq, (const uint8_t*) b->seq, aux);
 	for (int i = 0; i < aux->mem.n; i++) {
 		const bwtintv_t *p = &aux->mem.a[i];
@@ -192,7 +192,6 @@ void bwa_worker(void *data, long seq_id, int tid) {
 			int rid = bns_intv2rid(w->bns, s.rbeg, s.rbeg + s.len);
 		}
 	}
-	smem_aux_destroy(aux);
 }
 
 typedef kvec_t(bseq1_t) bseq1_v;
