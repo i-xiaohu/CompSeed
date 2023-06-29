@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <sstream>
 
 #include "../bwalib/ksw.h"
 #include "../cstl/kthread.h"
@@ -763,15 +764,13 @@ void CompAligner::normalize() {
 
 
 void CompAligner::seed_and_extend(int _start, int _end, int tid) {
-	double real_start = realtime();
+//	double real_start = realtime();
 	auto &aux = thr_aux[tid];
 	aux.forward_sst->clear(); aux.backward_sst->clear();
 	_end = std::min(_end, (int) reads.size()); // Out of right boundary happens
 	int n = _end - _start;
 	if (n == 0) return;
-	reads[_start + 0].offset = 0; // Set the absolute offset for reads in this batch
-	for (int i = 1; i < n; i++) { reads[_start+i].offset += reads[_start+i-1].offset; }
-	long ref_position = -1; // Starting from this position might avoid many BWT-extension for fully matched reads
+	int64_t ref_position = -1; // Starting from this position might avoid many BWT-extension for fully matched reads
 	for (int i = n - 1; i >= 0; i--) {
 		auto &read = reads[_start + i];
 		auto *bases = (uint8_t*) read.bases;
@@ -889,7 +888,7 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 			}
 		}
 	}
-	thr_aux[tid].seeding_real_sec += realtime() - real_start;
+//	thr_aux[tid].seeding_real_sec += realtime() - real_start;
 	// The code below that extends seeds to full alignments is deleted
 }
 
@@ -898,34 +897,60 @@ void CompAligner::run(const char *fn) {
 	threads_n = opt->n_threads;
 	thread_aux total;
 
-	fprintf(stderr, "Running compressive seeding (reads normalization performed)...\n");
+	fprintf(stderr, "Running compressive seeding\n");
 	gzFile in = gzopen(fn, "r"); assert(in != nullptr);
 	char *buffer = new char[1024]; memset(buffer, 0, 1024 * sizeof(char));
+	if (input_normalize) { // Skip header
+		fprintf(stderr, "Input reads with strand corrected and offset in compressed file provided\n");
+		gzgets(in, buffer, 1024);
+		gzgets(in, buffer, 1024);
+	} else {
+		fprintf(stderr ,"Manually performing reads normalization\n");
+	}
+	thr_aux = new thread_aux[threads_n];
+	for (int i = 0; i < threads_n; i++) {
+		auto &a = thr_aux[i];
+		a.forward_sst = new SST(bwa_idx->bwt);
+		a.backward_sst = new SST(bwa_idx->bwt);
+	}
 	while (true) {
 		// Input a batch of data
-		long bytes = 0; reads.clear();
-		while (gzgets(in, buffer, 1024)) {
-		    int len = strlen(buffer); buffer[--len] = '\0';
-			ngs_read read1;
-			read1.bases = strdup(buffer);
-			read_length = read1.len = len;
-			reads.push_back(read1);
-			bytes += read1.len;
-			if (bytes >= actual_chunk_size) break;
-		}
-		if (reads.empty()) break; // End Of File
+		if (input_normalize) {
+			long bytes = 0; reads.clear();
+			while (gzgets(in, buffer, 1024)) {
+				int len = strlen(buffer); buffer[--len] = '\0';
+				std::stringstream ss(buffer);
+				std::string bases; long offset; int is_rc;
+				ss >> bases >> offset >> is_rc;
+				ngs_read read1;
+				read1.bases = strdup(bases.c_str());
+				read_length = read1.len = bases.length();
+				read1.offset = offset;
+				read1.is_rc = is_rc;
+				reads.push_back(read1);
+				bytes += read1.len;
+				if (bytes >= actual_chunk_size) break;
+			}
+			if (reads.empty()) break; // End Of File
+		} else {
+			long bytes = 0; reads.clear();
+			while (gzgets(in, buffer, 1024)) {
+				int len = strlen(buffer); buffer[--len] = '\0';
+				ngs_read read1;
+				read1.bases = strdup(buffer);
+				read_length = read1.len = len;
+				reads.push_back(read1);
+				bytes += read1.len;
+				if (bytes >= actual_chunk_size) break;
+			}
+			if (reads.empty()) break; // End Of File
 
-		// Normalize all reordered reads (restoring offset and correcting strand)
-		normalize();
+			// Normalize all reordered reads (restoring offset and correcting strand)
+			normalize();
+		}
 
 		// Processing (I/O thread not supported yet)
 		if (print_seed) debug_out = (kstring_t*) calloc(reads.size(), sizeof(kstring_t));
-		thr_aux = new thread_aux[threads_n];
-		for (int i = 0; i < threads_n; i++) {
-			auto &a = thr_aux[i];
-			a.forward_sst = new SST(bwa_idx->bwt);
-			a.backward_sst = new SST(bwa_idx->bwt);
-		}
 
 		double cpu_start = cputime();
 		kt_for(
@@ -938,13 +963,6 @@ void CompAligner::run(const char *fn) {
 		);
 		thr_aux[0].seeding_cpu_sec += cputime() - cpu_start;
 
-		for (int i = 0; i < threads_n; i++) total += thr_aux[i];
-		for (int i = 0; i < threads_n; i++) {
-			auto &a = thr_aux[i];
-			delete a.forward_sst;
-			delete a.backward_sst;
-		}
-		delete [] thr_aux;
 		for (auto &r : reads) { free(r.bases); free(r.sam); }
 		if (print_seed) {
 			for (int i = 0; i < reads.size(); i++) {
@@ -956,6 +974,13 @@ void CompAligner::run(const char *fn) {
 		processed_n += reads.size();
 		fprintf(stderr, "%ld reads processed\n", processed_n);
 	}
+	for (int i = 0; i < threads_n; i++) total += thr_aux[i];
+	for (int i = 0; i < threads_n; i++) {
+		auto &a = thr_aux[i];
+		delete a.forward_sst;
+		delete a.backward_sst;
+	}
+	delete [] thr_aux;
 	display_profile(total);
 
 	bwa_idx_destroy(bwa_idx);

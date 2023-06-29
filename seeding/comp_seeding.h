@@ -52,7 +52,7 @@ mem_opt_t *mem_opt_init();
 struct ngs_read {
 	int16_t len; // Read length
 	uint16_t is_rc; // Reverse-complemented or not
-	int32_t offset; // Offset in consensus built by compressor
+	int64_t offset; // Offset in consensus built by compressor
 	char *bases; // ACGTN (const char*) or their encodings 01234 (const uint8_t*)
 	char *sam; // Alignment result in SAM format
 	ngs_read() { len = is_rc = offset = 0; bases = sam = nullptr; }
@@ -219,6 +219,7 @@ public:
 
 	mem_opt_t *opt = nullptr; // BWA-MEM built-in parameters
 	bool print_seed = false; // Print all seeds to stdout for validation
+	bool input_normalize = false;
 	int actual_chunk_size = 0; // Size of each input
 
 	/** Compressed super-mem1 algorithm with SST; used for seeding and re-seeding. */
