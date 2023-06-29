@@ -51,7 +51,7 @@ mem_opt_t *mem_opt_init();
 /** Storing decompressed NGS reads */
 struct ngs_read {
 	int16_t len; // Read length
-	int16_t is_rc; // Reverse-complemented or not
+	uint16_t is_rc; // Reverse-complemented or not
 	int32_t offset; // Offset in consensus built by compressor
 	char *bases; // ACGTN (const char*) or their encodings 01234 (const uint8_t*)
 	char *sam; // Alignment result in SAM format
@@ -212,6 +212,8 @@ private:
 
 	kstring_t *debug_out = nullptr; // Debug information output to stdout
 
+	char complement_tab[256];
+
 public:
 	void load_index(const char *fn);
 
@@ -250,7 +252,11 @@ public:
 					int *_gtle, int *_gscore,
 					int *_max_off, thread_aux &aux);
 
+	/** Calculate the distance and strand for i and i + 1 */
+	void calc_distance(int seq_id);
+
 	/** Restoring offset and corrected strand for reordered reads. */
+	void normalize();
 
 	/** Align reads from start to end-1 with thread tid. (So far, only run seeding) */
 	void seed_and_extend(int start, int end, int tid);
