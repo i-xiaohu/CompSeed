@@ -219,7 +219,6 @@ public:
 
 	mem_opt_t *opt = nullptr; // BWA-MEM built-in parameters
 	bool print_seed = false; // Print all seeds to stdout for validation
-	bool input_normalize = false;
 	int actual_chunk_size = 0; // Size of each input
 
 	/** Compressed super-mem1 algorithm with SST; used for seeding and re-seeding. */
@@ -252,12 +251,6 @@ public:
 					int *_qle, int *_tle,
 					int *_gtle, int *_gscore,
 					int *_max_off, thread_aux &aux);
-
-	/** Calculate the distance and strand for i and i + 1 */
-	void calc_distance(int seq_id);
-
-	/** Restoring offset and corrected strand for reordered reads. */
-	void normalize();
 
 	/** Align reads from start to end-1 with thread tid. (So far, only run seeding) */
 	void seed_and_extend(int start, int end, int tid);

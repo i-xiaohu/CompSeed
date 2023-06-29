@@ -699,70 +699,6 @@ void CompAligner::display_profile(const thread_aux &total) {
 	fprintf(stderr, "Real %.2f seconds in total threads\n", total.seeding_real_sec);
 }
 
-void CompAligner::calc_distance(int seq_id) {
-	if (seq_id == 0) {
-		reads[0].offset = 0;
-		reads[0].is_rc = 0;
-	} else {
-		const auto &prev = reads[seq_id - 1];
-		auto &curr = reads[seq_id];
-		const int ERR_LIMIT = curr.len / 10;
-		curr.offset = curr.len;
-		for (int d = 0; d < curr.len / 2; d++) {
-			// Keep the previous read fixed, match the current read in forward manner
-			int mis_forward = 0;
-			for (int i = 0; i + d < prev.len; i++) {
-				if (prev.bases[i + d] != curr.bases[i]) {
-					mis_forward++;
-					if (mis_forward > ERR_LIMIT) break;
-				}
-			}
-			if (mis_forward <= ERR_LIMIT) { curr.is_rc = 0; curr.offset = d; break; }
-
-			// Keep the previous read fixed, match the current read in reversed manner
-			int mis_reverse = 0;
-			for (int i = 0; i + d < prev.len; i++) {
-				if (prev.bases[i + d] != complement_tab[curr.bases[curr.len-1-i]]) {
-					mis_reverse++;
-					if (mis_reverse > ERR_LIMIT) break;
-				}
-			}
-			if (mis_reverse <= ERR_LIMIT) { curr.is_rc = 1; curr.offset = d; break; }
-		}
-	}
-}
-
-void CompAligner::normalize() {
-	memset(complement_tab, 0, sizeof(complement_tab));
-	complement_tab['A'] = 'T'; complement_tab['T'] = 'A';
-	complement_tab['C'] = 'G'; complement_tab['G'] = 'C';
-	complement_tab['N'] = 'N';
-	kt_for(
-			threads_n,
-			[] (void *d, long i, int t) -> void {
-				((CompAligner*)d)->calc_distance(i);
-			},
-			this,
-			reads.size());
-
-	for (int i = 1; i < reads.size(); i++) {
-		// Before, read.is_rc with respect to its previous read
-		uint16_t curr_status = reads[i].is_rc ^ reads[i-1].is_rc;
-		if (curr_status) {
-			auto &r = reads[i];
-			for (int j = 0; j < r.len; j++) {
-				r.bases[j] = complement_tab[r.bases[j]];
-			}
-			for (int j = 0; j < r.len / 2; j++) {
-				std::swap(r.bases[j], r.bases[r.len-1-j]);
-			}
-		}
-		// Now, read.is_rc with respect to the read itself
-		reads[i].is_rc = curr_status;
-	}
-}
-
-
 void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 //	double real_start = realtime();
 	auto &aux = thr_aux[tid];
@@ -770,8 +706,7 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 	_end = std::min(_end, (int) reads.size()); // Out of right boundary happens
 	int n = _end - _start;
 	if (n == 0) return;
-	int64_t ref_position = -1; // Starting from this position might avoid many BWT-extension for fully matched reads
-	for (int i = n - 1; i >= 0; i--) {
+	for (int i = 0; i < n; i++) {
 		auto &read = reads[_start + i];
 		auto *bases = (uint8_t*) read.bases;
 		for (int j = 0; j < read.len; j++) { // Convert ACGTN to 01234 if hasn't done so far
@@ -779,45 +714,12 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 		}
 
 		std::vector<bwtintv_t> &match = aux.match[i]; match.clear();
-		bool full_match = false; // Whether this read could be full-length matched
-		if (ref_position != -1 and ref_position - read.offset <= read.len / 3) {
-			// Lookup forward SST to test if this read can be fully matched
-			int node_id = 0;
-			for (int j = ref_position - read.offset; j < read.len; j++) {
-				if (bases[j] < 4) {
-					if (j == ref_position - read.offset) node_id = aux.forward_sst->get_child(node_id, bases[j]);
-					else node_id = aux.forward_sst->get_child(node_id, 3 - bases[j]);
-				} else node_id = -1;
-				if (node_id == -1) break;
+		for (int j = 0; j < read.len; ) {
+			j = collect_mem_with_sst(bases, read.len, j, 1, aux);
+			for (const auto &m : aux.super_mem) {
+				if (mem_len(m) >= opt->min_seed_len)
+					match.push_back(m);
 			}
-			if (node_id != -1) { // matched in forward SST till the end of read
-				bwtintv_t ik = aux.forward_sst->get_intv(node_id), ok[4];
-				// It is a potential full-match read
-				for (int j = ref_position - read.offset - 1; j >= 0; j--) {
-					if (bases[j] < 4) {
-						bwt_extend(bwt, &ik, ok, 1);
-						ik = ok[bases[j]];
-					} else ik.x[2] = 0;
-					if (ik.x[2] == 0) break;
-				}
-				if (ik.x[2] > 0) {
-					full_match = true;
-					aux.shortcut++;
-					ik.info = read.len;
-					if (mem_len(ik) >= opt->min_seed_len) match.push_back(ik);
-				}
-			}
-		}
-
-		if (not full_match) { // Go to the regular SMEM searching pass
-			for (int j = 0; j < read.len; ) {
-				j = collect_mem_with_sst(bases, read.len, j, 1, aux);
-				for (const auto &m : aux.super_mem) {
-					if (mem_len(m) >= opt->min_seed_len)
-						match.push_back(m);
-				}
-			}
-			ref_position = read.offset;
 		}
 		thr_aux[tid].full_read_match += (match.size() == 1 and mem_len(match[0]) == read.len);
 
@@ -900,13 +802,6 @@ void CompAligner::run(const char *fn) {
 	fprintf(stderr, "Running compressive seeding\n");
 	gzFile in = gzopen(fn, "r"); assert(in != nullptr);
 	char *buffer = new char[1024]; memset(buffer, 0, 1024 * sizeof(char));
-	if (input_normalize) { // Skip header
-		fprintf(stderr, "Input reads with strand corrected and offset in compressed file provided\n");
-		gzgets(in, buffer, 1024);
-		gzgets(in, buffer, 1024);
-	} else {
-		fprintf(stderr ,"Manually performing reads normalization\n");
-	}
 	thr_aux = new thread_aux[threads_n];
 	for (int i = 0; i < threads_n; i++) {
 		auto &a = thr_aux[i];
@@ -915,39 +810,17 @@ void CompAligner::run(const char *fn) {
 	}
 	while (true) {
 		// Input a batch of data
-		if (input_normalize) {
-			long bytes = 0; reads.clear();
-			while (gzgets(in, buffer, 1024)) {
-				int len = strlen(buffer); buffer[--len] = '\0';
-				std::stringstream ss(buffer);
-				std::string bases; long offset; int is_rc;
-				ss >> bases >> offset >> is_rc;
-				ngs_read read1;
-				read1.bases = strdup(bases.c_str());
-				read_length = read1.len = bases.length();
-				read1.offset = offset;
-				read1.is_rc = is_rc;
-				reads.push_back(read1);
-				bytes += read1.len;
-				if (bytes >= actual_chunk_size) break;
-			}
-			if (reads.empty()) break; // End Of File
-		} else {
-			long bytes = 0; reads.clear();
-			while (gzgets(in, buffer, 1024)) {
-				int len = strlen(buffer); buffer[--len] = '\0';
-				ngs_read read1;
-				read1.bases = strdup(buffer);
-				read_length = read1.len = len;
-				reads.push_back(read1);
-				bytes += read1.len;
-				if (bytes >= actual_chunk_size) break;
-			}
-			if (reads.empty()) break; // End Of File
-
-			// Normalize all reordered reads (restoring offset and correcting strand)
-			normalize();
+		long bytes = 0; reads.clear();
+		while (gzgets(in, buffer, 1024)) {
+			int len = strlen(buffer); buffer[--len] = '\0';
+			ngs_read read1;
+			read1.bases = strdup(buffer);
+			read_length = read1.len = len;
+			reads.push_back(read1);
+			bytes += read1.len;
+			if (bytes >= actual_chunk_size) break;
 		}
+		if (reads.empty()) break; // End Of File
 
 		// Processing (I/O thread not supported yet)
 		if (print_seed) debug_out = (kstring_t*) calloc(reads.size(), sizeof(kstring_t));
@@ -963,7 +836,7 @@ void CompAligner::run(const char *fn) {
 		);
 		thr_aux[0].seeding_cpu_sec += cputime() - cpu_start;
 
-		for (auto &r : reads) { free(r.bases); free(r.sam); }
+		for (auto &r : reads) { free(r.bases); }
 		if (print_seed) {
 			for (int i = 0; i < reads.size(); i++) {
 				fprintf(stdout, "%s\n", debug_out[i].s);

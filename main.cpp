@@ -31,7 +31,7 @@ int main(int argc, char *argv[]) {
 	struct option long_opts[]  = {
 		{"print", no_argument, nullptr, 3}
 	};
-	const char short_opts[] = "t:k:r:y:c:K:N";
+	const char short_opts[] = "t:k:r:y:c:K";
 	CompAligner worker;
 	int fixed_chunk_size = 0;
 	while (true) {
@@ -45,7 +45,6 @@ int main(int argc, char *argv[]) {
 		else if (c == 'y') opt->max_mem_intv = strtol(optarg, nullptr, 10);
 		else if (c == 'c') opt->max_occ = strtol(optarg, nullptr, 10);
 		else if (c == 'K') fixed_chunk_size = strtol(optarg, nullptr, 10);
-		else if (c == 'N') worker.input_normalize = true;
 		else {
 			fprintf(stderr, "Unrecognized option\n");
 			exit(EXIT_FAILURE);
