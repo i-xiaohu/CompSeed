@@ -85,6 +85,7 @@ mem_opt_t *mem_opt_init() {
 
 typedef struct {
 	bwtintv_v mem, mem1, *tmpv[2];
+	long bwt_cnt, sal_cnt; // Profile
 } smem_aux_t;
 
 smem_aux_t *smem_aux_init() {
@@ -92,6 +93,7 @@ smem_aux_t *smem_aux_init() {
 	a = (smem_aux_t*) calloc(1, sizeof(smem_aux_t));
 	a->tmpv[0] = (bwtintv_v*) calloc(1, sizeof(bwtintv_v));
 	a->tmpv[1] = (bwtintv_v*) calloc(1, sizeof(bwtintv_v));
+	a->bwt_cnt = a->sal_cnt = 0;
 	return a;
 }
 
@@ -100,6 +102,107 @@ void smem_aux_destroy(smem_aux_t *a) {
 	free(a->tmpv[1]->a); free(a->tmpv[1]);
 	free(a->mem.a); free(a->mem1.a);
 	free(a);
+}
+
+static void bwt_reverse_intvs(bwtintv_v *p) {
+	if (p->n > 1) {
+		int j;
+		for (j = 0; j < p->n>>1; ++j) {
+			bwtintv_t tmp = p->a[p->n - 1 - j];
+			p->a[p->n - 1 - j] = p->a[j];
+			p->a[j] = tmp;
+		}
+	}
+}
+
+int bwt_smem1_profile(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_intv, uint64_t max_intv, bwtintv_v *mem, bwtintv_v *tmpvec[2], long *bwt_cnt) {
+	int i, j, c, ret;
+	bwtintv_t ik, ok[4];
+	bwtintv_v a[2], *prev, *curr, *swap;
+
+	mem->n = 0;
+	if (q[x] > 3) return x + 1;
+	if (min_intv < 1) min_intv = 1; // the interval size should be at least 1
+	kv_init(a[0]); kv_init(a[1]);
+	prev = tmpvec && tmpvec[0]? tmpvec[0] : &a[0]; // use the temporary vector if provided
+	curr = tmpvec && tmpvec[1]? tmpvec[1] : &a[1];
+	bwt_set_intv(bwt, q[x], ik); // the initial interval of a single base
+	(*bwt_cnt)++;
+	ik.info = x + 1;
+
+	for (i = x + 1, curr->n = 0; i < len; ++i) { // forward search
+		if (ik.x[2] < max_intv) { // an interval small enough
+			kv_push(bwtintv_t, *curr, ik);
+			break;
+		} else if (q[i] < 4) { // an A/C/G/T base
+			c = 3 - q[i]; // complement of q[i]
+			bwt_extend(bwt, &ik, ok, 0);
+			(*bwt_cnt)++;
+			if (ok[c].x[2] != ik.x[2]) { // change of the interval size
+				kv_push(bwtintv_t, *curr, ik);
+				if (ok[c].x[2] < min_intv) break; // the interval size is too small to be extended further
+			}
+			ik = ok[c]; ik.info = i + 1;
+		} else { // an ambiguous base
+			kv_push(bwtintv_t, *curr, ik);
+			break; // always terminate extension at an ambiguous base; in this case, i<len always stands
+		}
+	}
+	if (i == len) kv_push(bwtintv_t, *curr, ik); // push the last interval if we reach the end
+	bwt_reverse_intvs(curr); // s.t. smaller intervals (i.e. longer matches) visited first
+	ret = curr->a[0].info; // this will be the returned value
+	swap = curr; curr = prev; prev = swap;
+
+	for (i = x - 1; i >= -1; --i) { // backward search for MEMs
+		c = i < 0? -1 : q[i] < 4? q[i] : -1; // c==-1 if i<0 or q[i] is an ambiguous base
+		for (j = 0, curr->n = 0; j < prev->n; ++j) {
+			bwtintv_t *p = &prev->a[j];
+			if (c >= 0 && ik.x[2] >= max_intv) {
+				bwt_extend(bwt, p, ok, 1);
+				(*bwt_cnt)++;
+			}
+			if (c < 0 || ik.x[2] < max_intv || ok[c].x[2] < min_intv) { // keep the hit if reaching the beginning or an ambiguous base or the intv is small enough
+				if (curr->n == 0) { // test curr->n>0 to make sure there are no longer matches
+					if (mem->n == 0 || i + 1 < mem->a[mem->n-1].info>>32) { // skip contained matches
+						ik = *p; ik.info |= (uint64_t)(i + 1)<<32;
+						kv_push(bwtintv_t, *mem, ik);
+					}
+				} // otherwise the match is contained in another longer match
+			} else if (curr->n == 0 || ok[c].x[2] != curr->a[curr->n-1].x[2]) {
+				ok[c].info = p->info;
+				kv_push(bwtintv_t, *curr, ok[c]);
+			}
+		}
+		if (curr->n == 0) break;
+		swap = curr; curr = prev; prev = swap;
+	}
+	bwt_reverse_intvs(mem); // s.t. sorted by the start coordinate
+
+	if (tmpvec == 0 || tmpvec[0] == 0) free(a[0].a);
+	if (tmpvec == 0 || tmpvec[1] == 0) free(a[1].a);
+	return ret;
+}
+
+int bwt_seed_profile(const bwt_t *bwt, int len, const uint8_t *q, int x, int min_len, int max_intv, bwtintv_t *mem, long *bwt_cnt) {
+	int i, c;
+	bwtintv_t ik, ok[4];
+
+	memset(mem, 0, sizeof(bwtintv_t));
+	if (q[x] > 3) return x + 1;
+	bwt_set_intv(bwt, q[x], ik); // the initial interval of a single base
+	for (i = x + 1; i < len; ++i) { // forward search
+		if (q[i] < 4) { // an A/C/G/T base
+			c = 3 - q[i]; // complement of q[i]
+			bwt_extend(bwt, &ik, ok, 0); (*bwt_cnt)++;
+			if (ok[c].x[2] < max_intv && i - x >= min_len) {
+				*mem = ok[c];
+				mem->info = (uint64_t)x<<32 | (i + 1);
+				return i + 1;
+			}
+			ik = ok[c];
+		} else return i + 1;
+	}
+	return len;
 }
 
 #define intv_lt(a, b) ((a).info < (b).info)
@@ -113,7 +216,7 @@ static void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, co
 	// first pass: find all SMEMs
 	while (x < len) {
 		if (seq[x] < 4) {
-			x = bwt_smem1(bwt, len, seq, x, start_width, &a->mem1, a->tmpv);
+			x = bwt_smem1_profile(bwt, len, seq, x, start_width, 0, &a->mem1, a->tmpv, &a->bwt_cnt);
 			for (i = 0; i < a->mem1.n; ++i) {
 				bwtintv_t *p = &a->mem1.a[i];
 				int slen = (uint32_t)p->info - (p->info>>32); // seed length
@@ -128,7 +231,7 @@ static void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, co
 		bwtintv_t *p = &a->mem.a[k];
 		int start = p->info>>32, end = (int32_t)p->info;
 		if (end - start < split_len || p->x[2] > opt->split_width) continue;
-		bwt_smem1(bwt, len, seq, (start + end)>>1, p->x[2]+1, &a->mem1, a->tmpv);
+		bwt_smem1_profile(bwt, len, seq, (start + end)>>1, p->x[2]+1, 0, &a->mem1, a->tmpv, &a->bwt_cnt);
 		for (i = 0; i < a->mem1.n; ++i)
 			if ((uint32_t)a->mem1.a[i].info - (a->mem1.a[i].info>>32) >= opt->min_seed_len)
 				kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
@@ -140,7 +243,7 @@ static void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, co
 			if (seq[x] < 4) {
 				if (1) {
 					bwtintv_t m;
-					x = bwt_seed_strategy1(bwt, len, seq, x, opt->min_seed_len, opt->max_mem_intv, &m);
+					x = bwt_seed_profile(bwt, len, seq, x, opt->min_seed_len, opt->max_mem_intv, &m, &a->bwt_cnt);
 					if (m.x[2] > 0) kv_push(bwtintv_t, a->mem, m);
 				} else { // for now, we never come to this block which is slower
 					x = bwt_smem1a(bwt, len, seq, x, start_width, opt->max_mem_intv, &a->mem1, a->tmpv);
@@ -187,9 +290,10 @@ void bwa_worker(void *data, long seq_id, int tid) {
 		for (int64_t k = 0, count = 0; k < p->x[2] && count < w->opt->max_occ; k += step, ++count) {
 			mem_seed_t s;
 			s.rbeg = bwt_sa(w->bwt, p->x[0] + k); // this is the base coordinate in the forward-reverse reference
+			aux->sal_cnt++;
 			s.qbeg = p->info >> 32;
 			s.score= s.len = slen;
-			int rid = bns_intv2rid(w->bns, s.rbeg, s.rbeg + s.len);
+//			int rid = bns_intv2rid(w->bns, s.rbeg, s.rbeg + s.len);
 		}
 	}
 }
@@ -203,6 +307,7 @@ void bwa_c_style(const char *index_fn, const char *read_fn, int actual_chunk_siz
 	char *buffer = (char*) calloc(1024, sizeof(char));
 	double total_cpu_time = 0;
 	long processed_n = 0;
+	long bwt_cnt = 0, sal_cnt = 0;
 	while (1) {
 		// Input a batch of data
 		long bytes = 0;
@@ -236,11 +341,17 @@ void bwa_c_style(const char *index_fn, const char *read_fn, int actual_chunk_siz
 		);
 		total_cpu_time += cputime() - cpu_start;
 
+		for (int i = 0; i < opt->n_threads; i++) {
+			bwt_cnt += w.aux[i]->bwt_cnt;
+			sal_cnt += w.aux[i]->sal_cnt;
+		}
 		for (int i = 0; i < seqs.n; i++) free(seqs.a[i].seq); free(seqs.a);
 		for (int i = 0; i < opt->n_threads; i++) smem_aux_destroy(w.aux[i]); free(w.aux);
 		processed_n += seqs.n;
 		fprintf(stderr, "%ld reads processed\n", processed_n);
 	}
+	fprintf(stderr, "BWT-extend: %ld calls\n", bwt_cnt);
+	fprintf(stderr, "SA Lookup:  %ld calls\n", sal_cnt);
 	fprintf(stderr, "Seeding cost %.2f CPU seconds\n", total_cpu_time);
 
 	bwa_idx_destroy(idx);

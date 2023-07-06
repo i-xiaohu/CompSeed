@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 project(comp_seed)
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O2")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O2")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O3")
 
 set(cstl
         cstl/kvec.h

@@ -686,17 +686,12 @@ std::vector<align_region> CompAligner::
 	return regions;
 }
 
-void CompAligner::display_profile(const thread_aux &total) {
-	auto full_read_match = total.full_read_match;
-	auto shortcut = total.shortcut;
-	fprintf(stderr, "Input reads in total:  %ld\n", processed_n);
-	fprintf(stderr, "Read length:           %d\n", read_length);
-	fprintf(stderr, "Perfect Matched Reads: %d (%.2f %%)\n", full_read_match, 100.0 * full_read_match / processed_n);
-	fprintf(stderr, "Reads go shortcut:     %d (%.2f %%)\n", shortcut, 100.0 * shortcut / processed_n);
-	fprintf(stderr, "Average calling of BWT-extend for each read: %.2f\n", 1.0 * total.bwt_call_times / processed_n);
-	fprintf(stderr, "Average calling of SAL for each read:        %.2f\n", 1.0 * total.sal_call_times / processed_n);
+void CompAligner::display_profile(const thread_aux &total) const {
+	fprintf(stderr, "Total reads: %ld\n", processed_n);
+	fprintf(stderr, "Read length: %d\n", read_length);
+	fprintf(stderr, "BWT-extend:  %ld calls\n", total.bwt_call_times);
+	fprintf(stderr, "SA Lookup:   %ld calls\n", total.sal_call_times);
 	fprintf(stderr, "Seeding cost %.2f CPU seconds\n", total.seeding_cpu_sec);
-	fprintf(stderr, "Real %.2f seconds in total threads\n", total.seeding_real_sec);
 }
 
 void CompAligner::seed_and_extend(int _start, int _end, int tid) {
@@ -721,7 +716,6 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 					match.push_back(m);
 			}
 		}
-		thr_aux[tid].full_read_match += (match.size() == 1 and mem_len(match[0]) == read.len);
 
 		int old_n = (int)match.size();
 		for (int j = 0; j < old_n; j++) {
@@ -774,10 +768,11 @@ void CompAligner::seed_and_extend(int _start, int _end, int tid) {
 		const auto &p = unique_sal[i];
 		if (i == 0 or unique_sal[i-1].que_location != p.que_location) {
 			coordinate = bwt_sa(bwa_idx->bwt, p.que_location);
+			aux.sal_call_times++;
 		}
 		auto &s = aux.seed[p.read_id][p.array_id];
 		s.rbeg = coordinate;
-		s.rid = bns_intv2rid(bwa_idx->bns, s.rbeg, s.rbeg + s.len);
+//		s.rid = bns_intv2rid(bwa_idx->bns, s.rbeg, s.rbeg + s.len);
 	}
 
 	if (print_seed) { // Print all seeds to debug output buffer
@@ -850,6 +845,8 @@ void CompAligner::run(const char *fn) {
 	for (int i = 0; i < threads_n; i++) total += thr_aux[i];
 	for (int i = 0; i < threads_n; i++) {
 		auto &a = thr_aux[i];
+		total.bwt_call_times += a.forward_sst->bwt_calls;
+		total.bwt_call_times += a.backward_sst->bwt_calls;
 		delete a.forward_sst;
 		delete a.backward_sst;
 	}

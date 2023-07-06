@@ -175,22 +175,14 @@ struct thread_aux {
 	std::vector<bwtintv_t> match[BATCH_SIZE]; // Exact matches for each read (minimum seed length guaranteed)
 	std::vector<sal_request> unique_sal; // Sorted suffix array hit locations for merging SAL operations
 	std::vector<seed_hit> seed[BATCH_SIZE]; // Seed hits for each read
-	smem_aux_t *mem_aux;
 
 	// Profiling time cost and calls number for BWT extension and SAL
 	long sal_call_times = 0;
 	long bwt_call_times = 0;
 	double seeding_cpu_sec = 0;
-	double seeding_real_sec = 0;
-	int full_read_match = 0; // Number of full-length matched reads
-	int shortcut = 0; // Number of reads that are full-length matched and avoid regular SMEM search
 	void operator += (const thread_aux &a) {
-		full_read_match += a.full_read_match;
-		shortcut += a.shortcut;
-		sal_call_times += a.sal_call_times;
-		bwt_call_times += a.bwt_call_times;
 		seeding_cpu_sec += a.seeding_cpu_sec;
-		seeding_real_sec += a.seeding_real_sec;
+		sal_call_times += a.sal_call_times;
 	}
 };
 
@@ -255,7 +247,7 @@ public:
 	/** Align reads from start to end-1 with thread tid. (So far, only run seeding) */
 	void seed_and_extend(int start, int end, int tid);
 
-	void display_profile(const thread_aux &total);
+	void display_profile(const thread_aux &total) const;
 
 	void run(const char *fn);
 };

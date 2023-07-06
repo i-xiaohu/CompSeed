@@ -31,7 +31,7 @@ int main(int argc, char *argv[]) {
 	struct option long_opts[]  = {
 		{"print", no_argument, nullptr, 3}
 	};
-	const char short_opts[] = "t:k:r:y:c:K";
+	const char short_opts[] = "t:k:r:y:c:K:";
 	CompAligner worker;
 	int fixed_chunk_size = 0;
 	while (true) {
