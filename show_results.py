@@ -27,7 +27,7 @@ def run():
     ]
     compressor = ['spring', 'minicom', 'pgrc']
     path_base = '/vol1/agis/ruanjue_group/jifahu/zsmem-experiments/'
-    header = ['Dataset', 'Spring-BWA', 'Spring-Comp', 'Minicom-BWA', 'Minicom-Comp', 'PgRC-BWA', 'PgRC-Comp']
+    header = ['Dataset', 'BWA', 'Spring', 'Minicom', 'PgRC']
     table = PrettyTable(header)
     for h in header:
         table.align[h] = 'r'
@@ -35,11 +35,13 @@ def run():
 
     for d in dataset:
         row = [d]
+        bwa = 0
         for c in compressor:
-            bwa_fn = '%s/%s/seed_log/%s.bwa' % (path_base, c, d)
-            comp_fn = '%s/%s/seed_log/%s.comp' % (path_base, c, d)
-            row.append(str(profile(bwa_fn)))
-            row.append(str(profile(comp_fn)))
+            bwa = max(bwa, profile('%s/%s/seed_log/%s.bwa' % (path_base, c, d)))
+        row.append(str(bwa))
+        for c in compressor:
+            comp = profile('%s/%s/seed_log/%s.comp' % (path_base, c, d))
+            row.append('%.0f (%.0f)' % (comp, 100 * comp / bwa))
         table.add_row(row)
         print('Dataset %s done' % d)
     print(table)
