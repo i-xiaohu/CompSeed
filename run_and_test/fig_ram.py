@@ -19,13 +19,15 @@ def run():
     big_red = '#e83929'
 
     fig, ax1 = plt.subplots()
-    fig.subplots_adjust(left=0.125, right=0.85, bottom=0.2, top=0.95)
+    fig.set_size_inches(6, 6)
+    fig.set_dpi(450)
+    fig.subplots_adjust(left=0.20, right=0.85, bottom=0.20, top=0.95)
     bwa_time, bwa_ram = 115652, 6
     mem2_time, mem2_ram = 77919, 27
     spring, minicom, pgrc = 55309, 57016, 56198
     comp_time, comp_ram = (spring + minicom + pgrc) / 3, 8
     ert_time, ert_ram = 41977, 74
-    pmi_time, pmi_ram = 35295, 128
+    pmi_time, pmi_ram = 35295, 120
 
     ax1.bar(0, bwa_time, color=light_red, align='edge', width=2)
     ax1.bar(3, comp_time, color=light_green, align='edge', width=2)
@@ -34,7 +36,7 @@ def run():
     ax1.bar(12, pmi_time, color=light_yellow, align='edge', width=2)
 
     ax1.set_ylabel("Runtime(s)", fontdict=font2)
-    ax1.set_xticks([1, 4, 7, 10, 13])
+    ax1.set_xticks([0, 3, 6, 10, 13])
     ax1.set_xticklabels(['FM-Index', 'Comp-Seed', 'BWA-MEM2', 'ERT', 'PMI'], rotation=45)
     ax1.tick_params(axis='x', length=0)
     ax1.tick_params(labelsize=15)
@@ -52,7 +54,7 @@ def run():
     ax2.tick_params(labelsize=15)
     [tl.set_fontname('Times New Roman') for tl in ax2.get_yticklabels()]
 
-    plt.show()
+    plt.savefig('image_ram.png')
 
 
 if __name__ == '__main__':
