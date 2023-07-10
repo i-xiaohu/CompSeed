@@ -42,7 +42,7 @@ def run():
     tick_labels = ax.get_xticklabels() + ax.get_yticklabels()
     [tl.set_fontname('Times New Roman') for tl in tick_labels]
     ax.legend(prop=font2)
-    ax.grid(True, linestyle='-', color='gray', linewidth=0.5)
+    ax.grid(True, axis='y', linestyle='-', color='gray', linewidth=0.3)
     ax.set_title('(a)', loc='left', fontdict=font1, pad=10)
 
     # Figure b
@@ -63,7 +63,7 @@ def run():
     ax.tick_params(labelsize=15)
     tick_labels = ax.get_xticklabels() + ax.get_yticklabels()
     [tl.set_fontname('Times New Roman') for tl in tick_labels]
-    ax.grid(True, linestyle='-', color='gray', linewidth=0.5)
+    ax.grid(True, axis='y', linestyle='-', color='gray', linewidth=0.3)
     ax.set_title('(b)', loc='left', fontdict=font1, pad=10)
 
     # Figure c
@@ -84,7 +84,7 @@ def run():
     ax.tick_params(labelsize=15)
     tick_labels = ax.get_xticklabels() + ax.get_yticklabels()
     [tl.set_fontname('Times New Roman') for tl in tick_labels]
-    ax.grid(True, linestyle='-', color='gray', linewidth=0.5)
+    ax.grid(True, axis='y', linestyle='-', color='gray', linewidth=0.3)
     ax.set_title('(c)', loc='left', fontdict=font1, pad=10)
 
     plt.savefig("./image_coverage.png")
