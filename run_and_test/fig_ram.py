@@ -37,7 +37,7 @@ def run():
 
     ax1.set_ylabel("Runtime(s)", fontdict=font2)
     ax1.set_xticks([0, 3, 6, 10, 13])
-    ax1.set_xticklabels(['FM-Index', 'Comp-Seed', 'BWA-MEM2', 'ERT', 'PMI'], rotation=45)
+    ax1.set_xticklabels(['FM-Index', 'Comp-Seed', 'BWA-MEM2', 'ERT', 'BWA-MEME'], rotation=45)
     ax1.tick_params(axis='x', length=0)
     ax1.tick_params(labelsize=15)
     [tl.set_fontname('Times New Roman') for tl in ax1.get_xticklabels()]
