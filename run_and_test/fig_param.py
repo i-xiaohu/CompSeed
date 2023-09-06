@@ -11,30 +11,27 @@ def fetch_time(fn: str):
 
 
 def run():
-    font1 = {'family': 'Times New Roman',
-             'weight': 'normal',
-             'size': 21}
     font2 = {'family': 'Times New Roman',
              'weight': 'normal',
-             'size': 18}
+             'size': 14}
     light_red = "#C5645D"
     light_blue = '#4779AC'
     light_green = '#80A87C'
     light_yellow = '#D3A428'
 
     seed_param = [0.5, 1.0, 1.5, 2.0, 2.5][::-1]
-    bwa_mem = [1866.11, 1619.26, 1537.84, 1536.88, 1484.28]
-    spring = [834.19, 827.46, 801.87, 789.59, 778.9]
-    minicom = [827.96, 854.33, 796.23, 796.63, 789.73]
-    pgrc = [835.08, 838.4, 798.09, 799.28, 765.14]
+    bwa_mem = [140339, 121775, 115652, 115579, 111624]
+    spring = [56758, 56300, 54559, 53723, 52996]
+    minicom = [61731, 63697, 59366, 59395, 58881]
+    pgrc = [58039, 58270, 55469, 55551, 53178]
 
     plt.figure(figsize=(5, 6), dpi=450)
     plt.subplots_adjust(left=0.20, right=0.90, bottom=0.1, top=0.95, wspace=0.3)
     ax = plt.subplot()
     ax.plot([x for x in seed_param], bwa_mem, marker='s', markersize=10, markerfacecolor='none', linewidth=1, color=light_red, label='BWA-MEM')
-    ax.plot([x for x in seed_param], spring,  marker='^', markersize=10, markerfacecolor='none', linewidth=1, color=light_blue, label='SPRING')
-    ax.plot([x for x in seed_param], minicom, marker='o', markersize=10, markerfacecolor='none', linewidth=1, color=light_green, label='Minicom')
-    ax.plot([x for x in seed_param], pgrc,    marker='+', markersize=10, markerfacecolor='none', linewidth=1, color=light_yellow, label='PgRC')
+    ax.plot([x for x in seed_param], spring,  marker='^', markersize=10, markerfacecolor='none', linewidth=1, color=light_blue, label='CS(SPRING)')
+    ax.plot([x for x in seed_param], minicom, marker='o', markersize=10, markerfacecolor='none', linewidth=1, color=light_green, label='CS(Minicom)')
+    ax.plot([x for x in seed_param], pgrc,    marker='+', markersize=10, markerfacecolor='none', linewidth=1, color=light_yellow, label='CS(PgRC)')
     ax.set_xlabel("Re-seeding", fontdict=font2)
     ax.set_ylabel("Runtime(s)", fontdict=font2)
     ax.set_xticks(seed_param)
@@ -43,6 +40,7 @@ def run():
     tick_labels = ax.get_xticklabels() + ax.get_yticklabels()
     [tl.set_fontname('Times New Roman') for tl in tick_labels]
     ax.grid(True, axis='y', linestyle='-', color='gray', linewidth=0.3)
+    ax.legend(prop=font2)
 
     plt.savefig('./image_param.png')
 
