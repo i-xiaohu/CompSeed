@@ -1,4 +1,0 @@
-/cygdrive/d/ClionProject/comp_seed/cmake-build-debug/CMakeFiles/rebuild_cache.dir
-/cygdrive/d/ClionProject/comp_seed/cmake-build-debug/CMakeFiles/edit_cache.dir
-/cygdrive/d/ClionProject/comp_seed/cmake-build-debug/CMakeFiles/comp_seed.dir
-/cygdrive/d/ClionProject/comp_seed/cmake-build-debug/CMakeFiles/bwaidx.dir
