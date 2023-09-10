@@ -1,0 +1,514 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CodeBlocks_project_file>
+	<FileVersion major="1" minor="6"/>
+	<Project>
+		<Option title="pgrc_learn"/>
+		<Option makefile_is_custom="1"/>
+		<Option compiler="gcc"/>
+		<Option virtualFolders="CMake Files\;"/>
+		<Build>
+			<Target title="all">
+				<Option working_dir="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug"/>
+				<Option type="4"/>
+				<MakeCommands>
+					<Build command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 all"/>
+					<CompileFile command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="rebuild_cache">
+				<Option working_dir="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug"/>
+				<Option type="4"/>
+				<MakeCommands>
+					<Build command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 rebuild_cache"/>
+					<CompileFile command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="edit_cache">
+				<Option working_dir="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug"/>
+				<Option type="4"/>
+				<MakeCommands>
+					<Build command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 edit_cache"/>
+					<CompileFile command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="btree">
+				<Option output="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/btree.exe" prefix_auto="0" extension_auto="0"/>
+				<Option working_dir="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug"/>
+				<Option object_output="./"/>
+				<Option type="1"/>
+				<Option compiler="gcc"/>
+				<Compiler>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/x86_64-pc-cygwin"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/backward"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include"/>
+					<Add directory="/usr/include"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/../../../../lib/../include/w32api"/>
+				</Compiler>
+				<MakeCommands>
+					<Build command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 btree"/>
+					<CompileFile command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="btree/fast">
+				<Option output="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/btree.exe" prefix_auto="0" extension_auto="0"/>
+				<Option working_dir="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug"/>
+				<Option object_output="./"/>
+				<Option type="1"/>
+				<Option compiler="gcc"/>
+				<Compiler>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/x86_64-pc-cygwin"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/backward"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include"/>
+					<Add directory="/usr/include"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/../../../../lib/../include/w32api"/>
+				</Compiler>
+				<MakeCommands>
+					<Build command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 btree/fast"/>
+					<CompileFile command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="PBM">
+				<Option output="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/PBM.exe" prefix_auto="0" extension_auto="0"/>
+				<Option working_dir="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug"/>
+				<Option object_output="./"/>
+				<Option type="1"/>
+				<Option compiler="gcc"/>
+				<Compiler>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/x86_64-pc-cygwin"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/backward"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include"/>
+					<Add directory="/usr/include"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/../../../../lib/../include/w32api"/>
+				</Compiler>
+				<MakeCommands>
+					<Build command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 PBM"/>
+					<CompileFile command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="PBM/fast">
+				<Option output="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/PBM.exe" prefix_auto="0" extension_auto="0"/>
+				<Option working_dir="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug"/>
+				<Option object_output="./"/>
+				<Option type="1"/>
+				<Option compiler="gcc"/>
+				<Compiler>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/x86_64-pc-cygwin"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/backward"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include"/>
+					<Add directory="/usr/include"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/../../../../lib/../include/w32api"/>
+				</Compiler>
+				<MakeCommands>
+					<Build command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 PBM/fast"/>
+					<CompileFile command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="pgrc_dec">
+				<Option output="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/pgrc_dec.exe" prefix_auto="0" extension_auto="0"/>
+				<Option working_dir="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug"/>
+				<Option object_output="./"/>
+				<Option type="1"/>
+				<Option compiler="gcc"/>
+				<Compiler>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/x86_64-pc-cygwin"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/backward"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include"/>
+					<Add directory="/usr/include"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/../../../../lib/../include/w32api"/>
+				</Compiler>
+				<MakeCommands>
+					<Build command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 pgrc_dec"/>
+					<CompileFile command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="pgrc_dec/fast">
+				<Option output="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/pgrc_dec.exe" prefix_auto="0" extension_auto="0"/>
+				<Option working_dir="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug"/>
+				<Option object_output="./"/>
+				<Option type="1"/>
+				<Option compiler="gcc"/>
+				<Compiler>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/x86_64-pc-cygwin"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/backward"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include"/>
+					<Add directory="/usr/include"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/../../../../lib/../include/w32api"/>
+				</Compiler>
+				<MakeCommands>
+					<Build command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 pgrc_dec/fast"/>
+					<CompileFile command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="bwaidx">
+				<Option output="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/bwaidx.exe" prefix_auto="0" extension_auto="0"/>
+				<Option working_dir="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug"/>
+				<Option object_output="./"/>
+				<Option type="1"/>
+				<Option compiler="gcc"/>
+				<Compiler>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/x86_64-pc-cygwin"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/backward"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include"/>
+					<Add directory="/usr/include"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/../../../../lib/../include/w32api"/>
+				</Compiler>
+				<MakeCommands>
+					<Build command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 bwaidx"/>
+					<CompileFile command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="bwaidx/fast">
+				<Option output="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/bwaidx.exe" prefix_auto="0" extension_auto="0"/>
+				<Option working_dir="/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug"/>
+				<Option object_output="./"/>
+				<Option type="1"/>
+				<Option compiler="gcc"/>
+				<Compiler>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/x86_64-pc-cygwin"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include/c++/backward"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/include"/>
+					<Add directory="/usr/include"/>
+					<Add directory="/usr/lib/gcc/x86_64-pc-cygwin/11/../../../../lib/../include/w32api"/>
+				</Compiler>
+				<MakeCommands>
+					<Build command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 bwaidx/fast"/>
+					<CompileFile command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make.exe -j16 -f &quot;/cygdrive/d/ClionProject/pgrc_learn/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+		</Build>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/QSufSort.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/QSufSort.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/bntseq.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/bntseq.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/bwt.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/bwt.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/bwt_gen.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/index_main.c">
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/is.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/rle.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/rle.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/rope.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/FM_index/rope.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/Matching/SimplePgMatcher.cpp">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/Matching/SimplePgMatcher.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PgRC_BWA_MEM/BTree.h">
+			<Option target="btree"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PgRC_BWA_MEM/bwamem.c">
+			<Option target="PBM"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PgRC_BWA_MEM/bwamem.h">
+			<Option target="PBM"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PgRC_BWA_MEM/bwamem_extra.c">
+			<Option target="PBM"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PgRC_BWA_MEM/bwamem_pair.c">
+			<Option target="PBM"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PgRC_BWA_MEM/comp_seeding.cpp">
+			<Option target="PBM"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PgRC_BWA_MEM/comp_seeding.h">
+			<Option target="PBM"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PseudoGenome/ExtendReadsList.cpp">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PseudoGenome/ExtendReadsList.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PseudoGenome/PseudoGenomeHeader.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PseudoGenome/SeparatedPG.cpp">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/PseudoGenome/SeparatedPG.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/ReadsSet/ReadsSetBase.cpp">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/ReadsSet/ReadsSetBase.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/Utils/LzmaLib.cpp">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/Utils/LzmaLib.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/Utils/VarLenDNACoder.cpp">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/Utils/VarLenDNACoder.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/Utils/helper.cpp">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/Utils/helper.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/bwalib/bwa.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/bwalib/bwa.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/bwalib/bwashm.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/bwalib/kopen.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/bwalib/kopen.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/bwalib/kseq.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/bwalib/ksw.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/bwalib/ksw.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/bwalib/utils.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/bwalib/utils.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/cstl/kbtree.h">
+			<Option target="btree"/>
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/cstl/khash.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/cstl/ksort.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/cstl/kstring.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/cstl/kstring.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/cstl/kthread.c">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/cstl/kthread.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/cstl/kvec.h">
+			<Option target="PBM"/>
+			<Option target="bwaidx"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/7zTypes.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/Alloc.c">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/Alloc.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/CpuArch.c">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/CpuArch.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/LzFind.c">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/LzFind.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/LzFindMt.c">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/LzFindMt.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/LzHash.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/LzmaDec.c">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/LzmaDec.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/LzmaEnc.c">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/LzmaEnc.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/Ppmd.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/Ppmd7.c">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/Ppmd7.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/Ppmd7Dec.c">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/Ppmd7Enc.c">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/Threads.c">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/lzma/Threads.h">
+			<Option target="PBM"/>
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/main.cpp">
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/manager.cpp">
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/manager.h">
+			<Option target="pgrc_dec"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/test.cpp">
+			<Option target="btree"/>
+		</Unit>
+		<Unit filename="/cygdrive/d/ClionProject/pgrc_learn/CMakeLists.txt">
+			<Option virtualFolder="CMake Files\"/>
+		</Unit>
+	</Project>
+</CodeBlocks_project_file>
