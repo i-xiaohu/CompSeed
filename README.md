@@ -96,3 +96,4 @@ the FM-index. All the acceleration benefits from the compression, thus does not 
   2082-2089.
 * Li H. (2013) Aligning sequence reads, clone sequences and assembly contigs
   with BWA-MEM.
+
