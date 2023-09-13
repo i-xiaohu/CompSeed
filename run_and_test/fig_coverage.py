@@ -34,7 +34,7 @@ def run():
     ax.plot([x for x in base_x], minicom, marker='o', markersize=10, markerfacecolor='none', linewidth=1, color=light_green, label='CS(Minicom)')
     ax.plot([x for x in base_x], pgrc,    marker='+', markersize=10, markerfacecolor='none', linewidth=1, color=light_yellow, label='CS(PgRC)')
     ax.set_xlabel("Coverage", fontdict=font2)
-    ax.set_ylabel("Runtime(s)", fontdict=font2)
+    ax.set_ylabel("Seeding time(s)", fontdict=font2)
     ax.set_xticks(base_x)
     ax.set_xticklabels(coverage)
     ax.tick_params(axis='x', length=0)
@@ -56,7 +56,7 @@ def run():
     ax.plot([x for x in base_x], minicom, marker='o', markersize=10, markerfacecolor='none', linewidth=1, color=light_green, label='CS(Minicom)')
     ax.plot([x for x in base_x], pgrc,    marker='+', markersize=10, markerfacecolor='none', linewidth=1, color=light_yellow, label='CS(PgRC)')
     ax.set_xlabel("Coverage", fontdict=font2)
-    ax.set_ylabel("BWT-Extend/Read", fontdict=font2)
+    ax.set_ylabel("BWT-extend/Read", fontdict=font2)
     ax.set_xticks(base_x)
     ax.set_xticklabels(coverage)
     ax.tick_params(axis='x', length=0)
@@ -87,7 +87,7 @@ def run():
     ax.grid(True, axis='y', linestyle='-', color='gray', linewidth=0.3)
     ax.set_title('(c)', loc='left', fontdict=font1, pad=10)
 
-    plt.savefig("./image_coverage.png")
+    plt.savefig("./Figure 3.png")
 
 
 if __name__ == '__main__':

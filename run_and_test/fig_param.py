@@ -13,7 +13,7 @@ def fetch_time(fn: str):
 def run():
     font2 = {'family': 'Times New Roman',
              'weight': 'normal',
-             'size': 14}
+             'size': 18}
     light_red = "#C5645D"
     light_blue = '#4779AC'
     light_green = '#80A87C'
@@ -25,15 +25,15 @@ def run():
     minicom = [61731, 63697, 59366, 59395, 58881]
     pgrc = [58039, 58270, 55469, 55551, 53178]
 
-    plt.figure(figsize=(5, 6), dpi=450)
-    plt.subplots_adjust(left=0.20, right=0.90, bottom=0.1, top=0.95, wspace=0.3)
+    plt.figure(figsize=(8, 8), dpi=450)
+    plt.subplots_adjust(left=0.20, right=0.85, bottom=0.20, top=0.95)
     ax = plt.subplot()
     ax.plot([x for x in seed_param], bwa_mem, marker='s', markersize=10, markerfacecolor='none', linewidth=1, color=light_red, label='BWA-MEM')
     ax.plot([x for x in seed_param], spring,  marker='^', markersize=10, markerfacecolor='none', linewidth=1, color=light_blue, label='CS(SPRING)')
     ax.plot([x for x in seed_param], minicom, marker='o', markersize=10, markerfacecolor='none', linewidth=1, color=light_green, label='CS(Minicom)')
     ax.plot([x for x in seed_param], pgrc,    marker='+', markersize=10, markerfacecolor='none', linewidth=1, color=light_yellow, label='CS(PgRC)')
-    ax.set_xlabel("Re-seeding", fontdict=font2)
-    ax.set_ylabel("Runtime(s)", fontdict=font2)
+    ax.set_xlabel("Re-seeding -r", fontdict=font2)
+    ax.set_ylabel("Seeding time(s)", fontdict=font2)
     ax.set_xticks(seed_param)
     ax.set_xticklabels(seed_param[::-1])
     ax.tick_params(labelsize=15)
@@ -42,7 +42,7 @@ def run():
     ax.grid(True, axis='y', linestyle='-', color='gray', linewidth=0.3)
     ax.legend(prop=font2)
 
-    plt.savefig('./image_param.png')
+    plt.savefig('./Figure 4.png')
 
 
 def output_time():
