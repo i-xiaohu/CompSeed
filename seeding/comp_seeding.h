@@ -12,6 +12,29 @@
 #include "../cstl/kstring.h"
 #include "SST.h"
 
+#define MEM_MAPQ_COEF 30.0
+#define MEM_MAPQ_MAX  60
+
+#define MEM_F_PE        0x2
+#define MEM_F_NOPAIRING 0x4
+#define MEM_F_ALL       0x8
+#define MEM_F_NO_MULTI  0x10
+#define MEM_F_NO_RESCUE 0x20
+#define MEM_F_REF_HDR	0x100
+#define MEM_F_SOFTCLIP  0x200
+#define MEM_F_SMARTPE   0x400
+#define MEM_F_PRIMARY5  0x800
+#define MEM_F_KEEP_SUPP_MAPQ 0x1000
+
+/* How many reads to process at a time.
+ * Batch size can impact the performance of compressive aligner.
+ * Increasing batch size digs out more redundancy provided by compressors.
+ * Decreasing batch size improves the load balance of multiple threads. */
+#define BATCH_SIZE 512
+
+/* CompSeed restricts maximum read length within 16-bit integer. */
+#define MAX_READ_LEN 65535
+
 typedef struct {
 	int a, b;               // match score and mismatch penalty
 	int o_del, e_del;
@@ -46,210 +69,90 @@ typedef struct {
 	int8_t mat[25];         // scoring matrix; mat[0] == 0 if unset
 } mem_opt_t;
 
-mem_opt_t *mem_opt_init();
-
-/** Storing decompressed NGS reads */
-struct ngs_read {
-	int16_t len; // Read length
-	uint16_t is_rc; // Reverse-complemented or not
-	int64_t offset; // Offset in consensus built by compressor
-	char *bases; // ACGTN (const char*) or their encodings 01234 (const uint8_t*)
-	char *sam; // Alignment result in SAM format
-	ngs_read() { len = is_rc = offset = 0; bases = sam = nullptr; }
-};
-
-/** Seed hit is an exact match between target reference and query read */
-struct seed_hit {
+/* I modified the structure and made the memory align given that CompSeed works for short reads compressed by tailored
+ * NGS compressors, which are typically designed for fixed-length reads of hundreds of base pairs. */
+struct mem_seed_t {
 	int64_t rbeg;
-	int32_t qbeg, len;
-	int32_t rid, score;
+	int16_t qbeg, len;
+	int32_t score;
 };
 
-/** A request for Suffix Array Lookup */
-struct sal_request {
+/* A request for Suffix Array Lookup(SAL) */
+struct sal_request_t {
 	uint64_t que_location; // The request position in suffix array
 	uint32_t read_id, array_id; // Which mem of which read made the request
-	sal_request(uint64_t h, uint32_t r, uint32_t a): que_location(h), read_id(r), array_id(a) {}
-	bool operator < (const sal_request &a) const { // Sort to merge duplicated SAL requests
+	sal_request_t(uint64_t h, uint32_t r, uint32_t a): que_location(h), read_id(r), array_id(a) {}
+	bool operator < (const sal_request_t &a) const { // Sort to merge duplicated SAL requests
 		return this->que_location < a.que_location;
 	}
 };
 
-/** Chain of co-linear seeds */
-struct seed_chain { // Do not change this aligned struct; it affects the B-tree order
-	int64_t anchor; // Anchor or the first seed location
-	int rid; // Chain can't cross multiple chromosomes
-	int first_cover; // Which chain that the current chain first shadows
-	int n, m; seed_hit *seeds; // Storing chained seeds
-	uint32_t w:29, kept:2, is_alt:1; // Chain weight; Kept level; alternative or not
-	float frac_rep; // Repetitive segment fraction across the chain
-
-	seed_chain() = default;
-
-	seed_chain(int64_t anchor): anchor(anchor) {}
-
-	int64_t ref_beg() const { return seeds[0].rbeg; }
-
-	int64_t ref_end() const { return seeds[n-1].rbeg + seeds[n-1].len; }
-
-	int que_beg() const { return seeds[0].qbeg; }
-
-	int que_end() const { return seeds[n-1].qbeg + seeds[n-1].len; }
-
-	void add_first_seed(const seed_hit &s) {
-		n = 1; m = 16;
-		seeds = (seed_hit*) malloc(m * sizeof(seed_hit));
-		seeds[0] = s;
-		rid = s.rid;
-	}
-
-	void push_back(const seed_hit &s) {
-		if (n == m){
-			m *= 2;
-			seeds = (seed_hit*) realloc(seeds, m * sizeof(seed_hit));
-		}
-		seeds[n++] = s;
-	}
-
-	int calc_weight() const {
-		// Seeds are non-decreasing on both read and reference
-		int que_end = 0, weight_on_que = 0;
-		for (int i = 0; i < n; i++) {
-			const auto &s = seeds[i];
-			if (s.qbeg >= que_end) weight_on_que += s.len;
-			else if (s.qbeg + s.len > que_end) weight_on_que += s.qbeg + s.len - que_end;
-			que_end = std::max(que_end, s.qbeg + s.len);
-		}
-
-		int64_t ref_end = 0, weight_on_ref = 0;
-		for (int i = 0; i < n; i++) {
-			const auto &s = seeds[i];
-			if (s.rbeg >= ref_end) weight_on_ref += s.len;
-			else if (s.rbeg + s.len > ref_end) weight_on_ref += s.rbeg + s.len - ref_end;
-			ref_end = std::max(ref_end, s.rbeg + s.len);
-		}
-
-		return std::min((int)weight_on_ref, weight_on_que);
-	}
-
-	void destroy() const { free(seeds); }
-};
-
-struct align_region {
-	int64_t rb, re; // [rb, re) reference sequence in the alignment
-	int qb, qe;     // [qb, qe) query sequence in the alignment
-	int rid;        // Reference sequence ID
-	int local_score;// Best local Smith-Waterman score
-	                // Actual score of the aligned region; could be the best local score
-    int true_score;	// or the global alignment score which is possibly smaller the former
-	int sub_score;  // Suboptimal SW score
-	int alt_score;  //
-	int tandem_sco; // SW score of a tandem hit
-	int sub_n;      // approximate number of suboptimal hits
-	int band_width; // Band width of SW matrix in seed extension
-	int seed_cover; // Length of the aligned region covered by seeds
-	int secondary;  // Point to the parent hit shadowing the current hit; < 0 if primary
-	int second_all; //
-	int seed_len0;  // Length of the staring seed that is extended to this alignment
-	int32_t n_comp:30, is_alt:2; // Number of sub-alignments chained together
-	float frac_rep; // Repetition fraction; equal to of the corresponding chain
-	uint64_t hash;  //
-};
-
-/** How many reads to process at a time. Batch size can impact the performance of compressive aligner.
- * Increasing batch size could dig out more redundancy but lowering the load balancing of threads.
- * Lowering batch size could not make good use of benefits provided by compressors. */
-#define BATCH_SIZE 512
-
-/** Auxiliary of BWA-MEM seeding */
 typedef struct {
-	bwtintv_v mem, mem1, *tmpv[2];
-} smem_aux_t;
+	int64_t rb, re; // [rb,re): reference sequence in the alignment
+	int qb, qe;     // [qb,qe): query sequence in the alignment
+	int rid;        // reference seq ID
+	int score;      // best local SW score
+	int truesc;     // actual score corresponding to the aligned region; possibly smaller than $score
+	int sub;        // 2nd best SW score
+	int alt_sc;
+	int csub;       // SW score of a tandem hit
+	int sub_n;      // approximate number of suboptimal hits
+	int w;          // actual band width used in extension
+	int seedcov;    // length of regions coverged by seeds
+	int secondary;  // index of the parent hit shadowing the current hit; <0 if primary
+	int secondary_all;
+	int seedlen0;   // length of the starting seed
+	int n_comp:30, is_alt:2; // number of sub-alignments chained together
+	float frac_rep;
+	uint64_t hash;
+} mem_alnreg_t;
 
-/** Auxiliary for each thread, maintaining essential buffers for alignment */
-struct thread_aux {
+typedef kvec_t(mem_alnreg_t) mem_alnreg_v;
+
+typedef struct {
+	int low, high;   // lower and upper bounds within which a read pair is considered to be properly paired
+	int failed;      // non-zero if the orientation is not supported by sufficient data
+	double avg, std; // mean and stddev of the insert size distribution
+} mem_pestat_t;
+
+// This struct is only used for the convenience of API.
+typedef struct {
+	int64_t pos;     // forward strand 5'-end mapping position
+	int rid;         // reference sequence index in bntseq_t; <0 for unmapped
+	int flag;        // extra flag
+	uint32_t is_rev:1, is_alt:1, mapq:8, NM:22; // is_rev: whether on the reverse strand; mapq: mapping quality; NM: edit distance
+	int n_cigar;     // number of CIGAR operations
+	uint32_t *cigar; // CIGAR in the BAM encoding: opLen<<4|op; op to integer mapping: MIDSH=>01234
+	char *XA;        // alternative mappings
+
+	int score, sub, alt_sc;
+} mem_aln_t;
+
+/* Auxiliary for each thread, maintaining essential buffers for alignment */
+struct thread_aux_t {
 	SST *forward_sst = nullptr; // Forward SST caching BWT forward extension
 	SST *backward_sst = nullptr; // Backward SST caching BWT backward extension
 	std::vector<bwtintv_t> prev_intv, curr_intv; // Buffer for forward search LEP and backward extension
 	std::vector<bwtintv_t> super_mem; // SMEMs returned from the function collect-mem
 	std::vector<bwtintv_t> match[BATCH_SIZE]; // Exact matches for each read (minimum seed length guaranteed)
-	std::vector<sal_request> unique_sal; // Sorted suffix array hit locations for merging SAL operations
-	std::vector<seed_hit> seed[BATCH_SIZE]; // Seed hits for each read
+	std::vector<sal_request_t> unique_sal; // Sorted suffix array hit locations for merging SAL operations
+	std::vector<mem_seed_t> seed[BATCH_SIZE]; // Seed hits for each read
 
-	// Profiling time cost and calls number for BWT extension and SAL
-	long sal_call_times = 0;
-	long bwt_call_times = 0;
-	double seeding_cpu_sec = 0;
-	void operator += (const thread_aux &a) {
-		seeding_cpu_sec += a.seeding_cpu_sec;
+	// Query and call number of BWT-extend and SAL
+	long sal_call_times = 0, sal_query_times = 0;
+	long bwt_call_times = 0, bwt_query_times = 0;
+	// Wait time of each stage in each thread
+	double bwt_real = 0, sal_real = 0, ext_real = 0;
+	void operator += (const thread_aux_t &a) {
+		bwt_call_times += a.bwt_call_times;
+		bwt_query_times += a.bwt_query_times;
 		sal_call_times += a.sal_call_times;
+		sal_query_times += a.sal_query_times;
 	}
 };
 
-class CompAligner {
-private:
-	// FM-index
-	bwaidx_t *bwa_idx = nullptr;
-	bntseq_t *bns = nullptr;
-	bwt_t *bwt = nullptr;
-	uint8_t *pac = nullptr;
+mem_opt_t *mem_opt_init();
 
-	// Working threads
-	int threads_n = 1;
-	thread_aux *thr_aux = nullptr;
-
-	int read_length = 0;
-	long processed_n = 0;
-	std::vector<ngs_read> reads; // Reads input from compressed file
-
-	kstring_t *debug_out = nullptr; // Debug information output to stdout
-
-	char complement_tab[256];
-
-public:
-	void load_index(const char *fn);
-
-	mem_opt_t *opt = nullptr; // BWA-MEM built-in parameters
-	bool print_seed = false; // Print all seeds to stdout for validation
-	int actual_chunk_size = 0; // Size of each input
-
-	/** Compressed super-mem1 algorithm with SST; used for seeding and re-seeding. */
-	static int collect_mem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, thread_aux &aux);
-
-	int tem_forward_sst(const uint8_t *seq, int len, int start, bwtintv_t *mem, thread_aux &aux) const;
-
-	/** Chaining seeds and filtering out light-weight chains and seeds. */
-	std::vector<seed_chain> chaining(const std::vector<seed_hit> &seed);
-
-	bool add_seed_to_chain(seed_chain *c, const seed_hit &s);
-
-	void print_chains_to(const std::vector<seed_chain> &chains, kstring_t *s);
-
-	/** Filtering poor seed in chain (not for short reads) */
-	void filter_seed_in_chain(const ngs_read &read, std::vector<seed_chain> &chain);
-
-	/** Calculate Smith-Waterman score for a seed */
-	int seed_sw_score(const ngs_read &read, const seed_hit &s);
-
-	/** Extend chain to alignment with Smith-Waterman Algorithm */
-	std::vector<align_region> extend_chain(const ngs_read &read,
-			std::vector<seed_chain> &chain, thread_aux &aux);
-
-	int smith_waterman(int qlen, const uint8_t *query, int tlen, const uint8_t *target,
-					int m, const int8_t *mat, int o_del, int e_del, int o_ins, int e_ins, int w,
-					int end_bonus,
-					int zdrop,
-					int h0,
-					int *_qle, int *_tle,
-					int *_gtle, int *_gscore,
-					int *_max_off, thread_aux &aux);
-
-	/** Align reads from start to end-1 with thread tid. (So far, only run seeding) */
-	void seed_and_extend(int start, int end, int tid);
-
-	void display_profile(const thread_aux &total) const;
-
-	void run(const char *fn);
-};
+void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, const uint8_t *pac, int64_t n_processed, int n, bseq1_t *seqs, const mem_pestat_t *pes0);
 
 #endif //COMP_SEED_COMP_SEEDING_H

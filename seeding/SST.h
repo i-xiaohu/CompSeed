@@ -11,7 +11,7 @@
 /** SMEM Search Tree (SST) Node */
 struct SST_Node_t {
 	bwtintv_t match; // SA interval in FMD-index
-	int children[4]; // Indexes of four children A,C,G,T
+	int children[4]; // Indexes of four children
 	SST_Node_t() { children[0] = children[1] = children[2] = children[3] = -1; }
 };
 
@@ -24,7 +24,7 @@ private:
 public:
 	explicit SST(const bwt_t *b);
 
-	long bwt_calls = 0; // call times of BWT-Extend function
+	int64_t bwt_call = 0; /** Real call times of BWT-extend */
 
 	/** At parent node with prefix p, query child node for p + base.
 	 * If the child node does not exist, query it from FMD-index. */
@@ -41,12 +41,13 @@ public:
 	 * suffixes is unknown so {0,0,0} is used to mark such nodes in SST. */
 	inline int add_empty_child(int parent, uint8_t base);
 
-	bwtintv_t get_intv(int id) { return nodes[id].match; }
+	inline bwtintv_t get_intv(int id) { return nodes[id].match; }
 
 	int get_child(int parent, uint8_t base) { return nodes[parent].children[base]; }
 
 	/** Only keep root and its four children */
-	void clear() {
+	inline void clear() {
+		bwt_call = 0;
 		nodes.resize(5);
 		for (int i = 1; i <= 4; i++) {
 			for (int &c : nodes[i].children) {
@@ -59,7 +60,7 @@ public:
 inline int SST::query_forward_child(int parent, uint8_t base) {
 	if (nodes[parent].children[base] == -1) {
 		bwt_extend(bwt, &nodes[parent].match, next, 0);
-		bwt_calls++;
+		bwt_call++;
 
 		SST_Node_t child;
 		child.match = next[base];
@@ -72,8 +73,7 @@ inline int SST::query_forward_child(int parent, uint8_t base) {
 inline int SST::query_backward_child(int parent, uint8_t base) {
 	if (nodes[parent].children[base] == -1) {
 		bwt_extend(bwt, &nodes[parent].match, next, 1);
-		bwt_calls++;
-
+		bwt_call++;
 		SST_Node_t child;
 		child.match = next[base];
 		nodes[parent].children[base] = nodes.size();
@@ -85,7 +85,7 @@ inline int SST::query_backward_child(int parent, uint8_t base) {
 		return nodes[parent].children[base];
 	} else {
 		bwt_extend(bwt, &nodes[parent].match, next, 1);
-		bwt_calls++;
+		bwt_call++;
 		c.match = next[base];
 		return nodes[parent].children[base];
 	}

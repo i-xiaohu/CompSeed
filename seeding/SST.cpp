@@ -20,7 +20,6 @@ SST::SST(const bwt_t *b) {
 int SST::query_child(int parent, uint8_t base, bool is_back) {
 	if (nodes[parent].children[base] == -1) {
 		bwt_extend(bwt, &nodes[parent].match, next, is_back);
-		bwt_calls++;
 
 		for (uint8_t c = 0; c < 4; c++) { // Is it necessary?
 			SST_Node_t child;
@@ -33,7 +32,6 @@ int SST::query_child(int parent, uint8_t base, bool is_back) {
 	// If find an empty node, BWT query is required
 	if (c.match.x[0] + c.match.x[1] + c.match.x[2] == 0) {
 		bwt_extend(bwt, &nodes[parent].match, next, is_back);
-		bwt_calls++;
 		c.match = next[base];
 	}
 	return nodes[parent].children[base];
