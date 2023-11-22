@@ -2,8 +2,8 @@
 // Created by ixiaohu on 2023/5/6.
 //
 
-#ifndef COMP_SEED_COMP_SEEDING_H
-#define COMP_SEED_COMP_SEEDING_H
+#ifndef COMP_SEED_COMP_SEED_H
+#define COMP_SEED_COMP_SEED_H
 
 #include <string>
 #include <vector>
@@ -155,4 +155,4 @@ mem_opt_t *mem_opt_init();
 
 void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, const uint8_t *pac, int64_t n_processed, int n, bseq1_t *seqs, const mem_pestat_t *pes0);
 
-#endif //COMP_SEED_COMP_SEEDING_H
+#endif //COMP_SEED_COMP_SEED_H

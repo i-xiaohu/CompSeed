@@ -2,7 +2,7 @@
 // Created by ixiaohu on 2023/5/6.
 //
 
-#include "comp_seeding.h"
+#include "comp_seed.h"
 
 #include <cstring>
 #include <cassert>

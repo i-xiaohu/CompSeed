@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(comp_seed)
 
+#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -Wall -O2")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wall -O3")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O2")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O3")
 
@@ -35,8 +37,8 @@ target_link_libraries(bwaidx -lz -lrt)
 add_executable(bwamem_seeding ${cstl} ${FM_index} ${bwalib} seeding/bwa_seeding.c)
 target_link_libraries(bwamem_seeding -lm -lz -lpthread -lrt)
 
-add_executable(comp_seeding ${cstl} ${FM_index} ${bwalib}
-        seeding/comp_seeding.cpp seeding/comp_seeding.h
+add_executable(CompSeed ${cstl} ${FM_index} ${bwalib}
+        seeding/comp_seed.cpp seeding/comp_seed.h
         seeding/SST.cpp seeding/SST.cpp
         main.cpp)
-target_link_libraries(comp_seeding -lm -lz -lpthread -lrt)
+target_link_libraries(CompSeed -lm -lz -lpthread -lrt)

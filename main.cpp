@@ -10,7 +10,7 @@
 #include "bwalib/utils.h"
 #include "bwalib/kopen.h"
 #include "cstl/kthread.h"
-#include "seeding/comp_seeding.h"
+#include "seeding/comp_seed.h"
 
 thread_aux_t tprof;
 
