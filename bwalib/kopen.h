@@ -2,10 +2,18 @@
 // Created by ixiaohu on 2021/9/22.
 //
 
-#ifndef ZIP_SEEDING_KOPEN_H
-#define ZIP_SEEDING_KOPEN_H
+#ifndef KOPEN_H
+#define KOPEN_H
 
-void *kopen(const char *fn, int *_fd);
-int kclose(void *a);
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#endif //ZIP_SEEDING_KOPEN_H
+	void *kopen(const char *fn, int *_fd);
+	int kclose(void *a);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif //KOPEN_H
