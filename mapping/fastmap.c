@@ -16,6 +16,8 @@ KSEQ_DECLARE(gzFile)
 extern unsigned char nst_nt4_table[256];
 
 typedef struct {
+	gzFile fp;
+	long has_input;
 	kseq_t *ks, *ks2;
 	mem_opt_t *opt;
 	mem_pestat_t *pes0;
@@ -30,6 +32,46 @@ typedef struct {
 	bseq1_t *seqs;
 } ktp_data_t;
 
+char *int2str(long x) {
+	char *r = (char*) malloc(16 * sizeof(char));
+	int n = 0;
+	while (x) {
+		r[n++] = '0' + (x % 10);
+		x /= 10;
+	}
+	r[n] = '\0';
+	for (int i = 0; i < n / 2; i++) {
+		char t = r[i];
+		r[i] = r[n-1-i];
+		r[n-1-i] = t;
+	}
+	return r;
+}
+
+bseq1_t *input_reorder_reads(int chunk_size, int *n_, gzFile fp, long has_input) {
+	int size = 0, m, n;
+	bseq1_t *seqs;
+	m = n = 0; seqs = NULL;
+	char line_buf[65536];
+	while (gzgets(fp, line_buf, 65536) != NULL) {
+		if (n >= m) {
+			m = m? m<<1 : 256;
+			seqs = (bseq1_t*) realloc(seqs, m * sizeof(bseq1_t));
+		}
+		memset(&seqs[n], 0, sizeof(seqs[n]));
+		seqs[n].name = int2str(has_input + n);
+		seqs[n].l_seq = strlen(line_buf) - 1; // Remove the trailing \n
+		assert(line_buf[seqs[n].l_seq] == '\n');
+		line_buf[seqs[n].l_seq] = '\0';
+		seqs[n].seq = strdup(line_buf);
+		seqs[n].id = n;
+		size += seqs[n++].l_seq;
+		if (size >= chunk_size && (n&1) == 0) break;
+	}
+	*n_ = n;
+	return seqs;
+}
+
 static void *process(void *shared, int step, void *_data)
 {
 	ktp_aux_t *aux = (ktp_aux_t*)shared;
@@ -39,7 +81,12 @@ static void *process(void *shared, int step, void *_data)
 		ktp_data_t *ret;
 		int64_t size = 0;
 		ret = calloc(1, sizeof(ktp_data_t));
-		ret->seqs = bseq_read(aux->actual_chunk_size, &ret->n_seqs, aux->ks, aux->ks2);
+		if (aux->ks) {
+			ret->seqs = bseq_read(aux->actual_chunk_size, &ret->n_seqs, aux->ks, aux->ks2);
+		} else {
+			ret->seqs = input_reorder_reads(aux->actual_chunk_size, &ret->n_seqs, aux->fp, aux->has_input);
+			aux->has_input += ret->n_seqs;
+		}
 		if (ret->seqs == 0) {
 			free(ret);
 			return 0;
@@ -328,13 +375,27 @@ int main(int argc, char *argv[])
 		for (i = 0; i < aux.idx->bns->n_seqs; ++i)
 			aux.idx->bns->anns[i].is_alt = 0;
 
-	ko = kopen(argv[optind + 1], &fd);
-	if (ko == 0) {
-		if (bwa_verbose >= 1) fprintf(stderr, "[E::%s] fail to open file `%s'.\n", __func__, argv[optind + 1]);
-		return 1;
+	int is_fastq = 1; // The input may be only reordered reads
+	fp = gzopen(argv[optind + 1], "r");
+	if (fp != NULL) {
+		char first = ' ';
+		gzread(fp, &first, sizeof(char));
+		if (first != '@') is_fastq = 0;
+		gzclose(fp);
 	}
-	fp = gzdopen(fd, "r");
-	aux.ks = kseq_init(fp);
+	if (is_fastq) {
+		ko = kopen(argv[optind + 1], &fd);
+		if (ko == 0) {
+			if (bwa_verbose >= 1) fprintf(stderr, "[E::%s] fail to open file `%s'.\n", __func__, argv[optind + 1]);
+			return 1;
+		}
+		fp = gzdopen(fd, "r");
+		aux.ks = kseq_init(fp);
+	} else {
+		aux.ks = NULL;
+		aux.fp = gzopen(argv[optind + 1], "r");
+		aux.has_input = 1;
+	}
 	if (optind + 2 < argc) {
 		if (opt->flag&MEM_F_PE) {
 			if (bwa_verbose >= 2)
@@ -356,8 +417,12 @@ int main(int argc, char *argv[])
 	free(hdr_line);
 	free(opt);
 	bwa_idx_destroy(aux.idx);
-	kseq_destroy(aux.ks);
-	err_gzclose(fp); kclose(ko);
+	if (is_fastq) {
+		kseq_destroy(aux.ks);
+		err_gzclose(fp); kclose(ko);
+	} else {
+		gzclose(aux.fp);
+	}
 	if (aux.ks2) {
 		kseq_destroy(aux.ks2);
 		err_gzclose(fp2); kclose(ko2);
