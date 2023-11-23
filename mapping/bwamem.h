@@ -15,6 +15,7 @@ typedef struct __smem_i smem_i;
 typedef struct {
 	long bwt_call, sal_call;
 	double bwt_time, sal_time, ext_time;
+	long padding[512]; // Avoid cache contention
 } profile_t;
 
 #define MEM_F_PE        0x2
