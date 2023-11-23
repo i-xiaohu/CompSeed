@@ -33,7 +33,7 @@ typedef struct {
 	bseq1_t *seqs;
 } ktp_data_t;
 
-bseq1_t *input_reorder_reads(int chunk_size, int *n_, gzFile fp, int has_input) {
+bseq1_t *input_reorder_reads(int chunk_size, int *n_, gzFile fp, long has_input) {
 	int size = 0, m, n;
 	bseq1_t *seqs;
 	m = n = 0; seqs = nullptr;
@@ -400,6 +400,7 @@ int main(int argc, char *argv[]) {
 	} else {
 		aux.ks = nullptr;
 		aux.fp = gzopen(argv[optind + 1], "r");
+		aux.has_input = 1;
 	}
 //	if (optind + 2 < argc) {
 //		if (opt->flag&MEM_F_PE) {

@@ -1257,7 +1257,7 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 		}
 		free(chn.a);
 		// 5. Filter out shadowed hits
-		regs.n = mem_sort_dedup_patch(opt, bns, pac, (uint8_t*)read.seq, regs.n, regs.a);
+		regs.n = mem_sort_dedup_patch(opt, bns, pac, seq, regs.n, regs.a);
 		if (bwa_verbose >= 4) {
 			err_printf("* %ld chains remain after removing duplicated chains\n", regs.n);
 			for (int i = 0; i < regs.n; ++i) {
@@ -1272,7 +1272,7 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 		}
 		// 6. Mark primary alignment
 		if (bwa_verbose >= 4) printf("=====> Finalizing read '%s' <=====\n", read.name);
-		mem_mark_primary_se(opt, regs.n, regs.a, w->n_processed + r);
+		mem_mark_primary_se(opt, regs.n, regs.a, w->n_processed + _start + r);
 		if (opt->flag & MEM_F_PRIMARY5) mem_reorder_primary5(opt->T, &regs);
 		// 7. Convert alignment to SAM format
 		mem_reg2sam(opt, bns, pac, &read, &regs, 0, 0);
