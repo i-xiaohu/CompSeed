@@ -79,12 +79,12 @@ For `bwamem_seeding` and `comp_seeding`, all the original parameters of BWA-MEM 
 CompSeed fully utilizes the redundancy information provided from upstream compressors, and avoids ~50% of the redundant
 time-consuming FM-index operations during the BWA-MEM seeding process.
 
-![Seeding time of BWA-MEM and CompSeed](run_and_test/Table1.jpg)
+![Seeding time of BWA-MEM and CompSeed](images/Table1.jpg)
 
 It shows enhanced performance as sequencing coverage increases, and it is almost not affected by the re-seeding parameter.
 Moreover, it has substantial memory advantage compared with the existing solutions, because it does not replace or modify 
 the FM-index. All the acceleration benefits from the compression, thus does not conflict with existing hardware-based optimizations.
-![Seeding time of BWA-MEM and CompSeed](run_and_test/Figure1.jpg)
+![Seeding time of BWA-MEM and CompSeed](images/Figure1.jpg)
 
 ## References
 
