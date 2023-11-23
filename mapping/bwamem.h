@@ -11,6 +11,12 @@
 struct __smem_i;
 typedef struct __smem_i smem_i;
 
+// Profiling the time cost and BWT/SAL calls of BWA-MEM
+typedef struct {
+	long bwt_call, sal_call;
+	double bwt_time, sal_time, ext_time;
+} profile_t;
+
 #define MEM_F_PE        0x2
 #define MEM_F_NOPAIRING 0x4
 #define MEM_F_ALL       0x8

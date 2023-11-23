@@ -1294,7 +1294,7 @@ void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 		w.aux[i].backward_sst = new SST(bwt);
 	}
 
-	// Profiling the time of the lowest thread
+	// Profiling the time of the slowest thread
 	for (int i = 0; i < opt->n_threads; i++) w.aux[i].bwt_real = w.aux[i].sal_real = w.aux[i].ext_real = 0;
 	kt_for(
 			opt->n_threads,

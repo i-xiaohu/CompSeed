@@ -14,6 +14,7 @@
 KSEQ_DECLARE(gzFile)
 
 extern unsigned char nst_nt4_table[256];
+profile_t tprof;
 
 typedef struct {
 	gzFile fp;
@@ -154,8 +155,15 @@ static void update_a(mem_opt_t *opt, const mem_opt_t *opt0)
 	}
 }
 
+void display_profile(const profile_t *t) {
+	fprintf(stderr, "BWT-extend:  %ld calls\n", t->bwt_call);
+	fprintf(stderr, "SA Lookup:   %ld calls\n", t->sal_call);
+	fprintf(stderr, "Wall time: BWT %.2f, SAL %.2f, DP %.2f seconds\n", t->bwt_time, t->sal_time, t->ext_time);
+}
+
 int main(int argc, char *argv[])
 {
+	memset(&tprof, 0, sizeof(tprof));
 	mem_opt_t *opt, opt0;
 	int fd, fd2, i, c, ignore_alt = 0, no_mt_io = 0;
 	int fixed_chunk_size = -1;
@@ -427,5 +435,6 @@ int main(int argc, char *argv[])
 		kseq_destroy(aux.ks2);
 		err_gzclose(fp2); kclose(ko2);
 	}
+	display_profile(&tprof);
 	return 0;
 }
