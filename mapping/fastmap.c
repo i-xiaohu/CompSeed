@@ -1,24 +1,21 @@
-//
-// Created by ixiaohu on 2023/6/22.
-//
+#include <zlib.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <math.h>
+#include "../bwalib/bwa.h"
+#include "../bwalib/utils.h"
+#include "../bwalib/kseq.h"
+#include "../bwalib/kopen.h"
+#include "../cstl/kthread.h"
+#include "bwamem.h"
+KSEQ_DECLARE(gzFile)
 
-#include <cstdio>
-#include <getopt.h>
-#include <cmath>
-#include "bwalib/bwa.h"
-#include "bwalib/kseq.h"
-#include "bwalib/utils.h"
-#include "bwalib/kopen.h"
-#include "cstl/kthread.h"
-#include "mapping//comp_seed.h"
-
-thread_aux_t tprof;
-
-KSEQ_INIT(gzFile, gzread)
+extern unsigned char nst_nt4_table[256];
 
 typedef struct {
-	gzFile fp; // For reordered reads
-	long has_input; // To assign a fake qname for reordered reads
 	kseq_t *ks, *ks2;
 	mem_opt_t *opt;
 	mem_pestat_t *pes0;
@@ -33,43 +30,16 @@ typedef struct {
 	bseq1_t *seqs;
 } ktp_data_t;
 
-bseq1_t *input_reorder_reads(int chunk_size, int *n_, gzFile fp, int has_input) {
-	int size = 0, m, n;
-	bseq1_t *seqs;
-	m = n = 0; seqs = nullptr;
-	char line_buf[MAX_READ_LEN];
-	while (gzgets(fp, line_buf, MAX_READ_LEN) != nullptr) {
-		if (n >= m) {
-			m = m? m<<1 : 256;
-			seqs = (bseq1_t*) realloc(seqs, m * sizeof(bseq1_t));
-		}
-		memset(&seqs[n], 0, sizeof(seqs[n]));
-		seqs[n].name = strdup(std::to_string(has_input + n).c_str());
-		seqs[n].l_seq = strlen(line_buf) - 1; // Remove the trailing \n
-		assert(line_buf[seqs[n].l_seq] == '\n');
-		line_buf[seqs[n].l_seq] = '\0';
-		seqs[n].seq = strdup(line_buf);
-		seqs[n].id = n;
-		size += seqs[n++].l_seq;
-		if (size >= chunk_size && (n&1) == 0) break;
-	}
-	*n_ = n;
-	return seqs;
-}
-
-static void *process(void *shared, int step, void *_data) {
-	auto *aux = (ktp_aux_t*)shared;
-	auto *data = (ktp_data_t*)_data;
+static void *process(void *shared, int step, void *_data)
+{
+	ktp_aux_t *aux = (ktp_aux_t*)shared;
+	ktp_data_t *data = (ktp_data_t*)_data;
 	int i;
 	if (step == 0) {
+		ktp_data_t *ret;
 		int64_t size = 0;
-		auto *ret = (ktp_data_t*) calloc(1, sizeof(ktp_data_t));
-		if (aux->ks) {
-			ret->seqs = bseq_read(aux->actual_chunk_size, &ret->n_seqs, aux->ks, aux->ks2);
-		} else {
-			ret->seqs = input_reorder_reads(aux->actual_chunk_size, &ret->n_seqs, aux->fp, aux->has_input);
-			aux->has_input += ret->n_seqs;
-		}
+		ret = calloc(1, sizeof(ktp_data_t));
+		ret->seqs = bseq_read(aux->actual_chunk_size, &ret->n_seqs, aux->ks, aux->ks2);
 		if (ret->seqs == 0) {
 			free(ret);
 			return 0;
@@ -79,13 +49,7 @@ static void *process(void *shared, int step, void *_data) {
 				free(ret->seqs[i].comment);
 				ret->seqs[i].comment = 0;
 			}
-		for (i = 0; i < ret->n_seqs; ++i) {
-			if (ret->seqs[i].l_seq >= MAX_READ_LEN) {
-				fprintf(stderr, "[E::%s] Read length of %d exceeds the limit %d\n", __func__, ret->seqs[i].l_seq, MAX_READ_LEN);
-				abort();
-			}
-			size += ret->seqs[i].l_seq;
-		}
+		for (i = 0; i < ret->n_seqs; ++i) size += ret->seqs[i].l_seq;
 		if (bwa_verbose >= 3)
 			fprintf(stderr, "[M::%s] read %d sequences (%ld bp)...\n", __func__, ret->n_seqs, (long)size);
 		return ret;
@@ -127,7 +91,8 @@ static void *process(void *shared, int step, void *_data) {
 	return 0;
 }
 
-static void update_a(mem_opt_t *opt, const mem_opt_t *opt0) {
+static void update_a(mem_opt_t *opt, const mem_opt_t *opt0)
+{
 	if (opt0->a) { // matching score is changed
 		if (!opt0->b) opt->b *= opt->a;
 		if (!opt0->T) opt->T *= opt->a;
@@ -142,73 +107,8 @@ static void update_a(mem_opt_t *opt, const mem_opt_t *opt0) {
 	}
 }
 
-static void print_usage(const mem_opt_t *opt) {
-	fprintf(stderr, "Usage: CompSeed [options] <FM-index> <Reordered Reads>\n\n");
-	fprintf(stderr, "CompSeed implements the compressive seeding version of BWA-MEM under reordering-based compression. It\n");
-	fprintf(stderr, "supports all built-in parameters of BWA-MEM seeding and generates identical seeds/alignments.\n\n");
-	fprintf(stderr, "Algorithm options:\n\n");
-	fprintf(stderr, "       -t INT        number of threads [%d]\n", opt->n_threads);
-	fprintf(stderr, "       -k INT        minimum seed length [%d]\n", opt->min_seed_len);
-	fprintf(stderr, "       -w INT        band width for banded alignment [%d]\n", opt->w);
-	fprintf(stderr, "       -d INT        off-diagonal X-dropoff [%d]\n", opt->zdrop);
-	fprintf(stderr, "       -r FLOAT      look for internal seeds inside a seed longer than {-k} * FLOAT [%g]\n", opt->split_factor);
-//	fprintf(stderr, "       -y INT        seed occurrence for the 3rd round seeding [%ld]\n", (long)opt->max_mem_intv);
-	fprintf(stderr, "       -c INT        skip seeds with more than INT occurrences [%d]\n", opt->max_occ);
-	fprintf(stderr, "       -D FLOAT      drop chains shorter than FLOAT fraction of the longest overlapping chain [%.2f]\n", opt->drop_ratio);
-	fprintf(stderr, "       -W INT        discard a chain if seeded bases shorter than INT [0]\n");
-	fprintf(stderr, "       -m INT        perform at most INT rounds of mate rescues for each read [%d]\n", opt->max_matesw);
-	fprintf(stderr, "       -S            skip mate rescue\n");
-	fprintf(stderr, "       -P            skip pairing; mate rescue performed unless -S also in use\n");
-	fprintf(stderr, "\n");
-	fprintf(stderr, "Scoring options:\n\n");
-	fprintf(stderr, "       -A INT        score for a sequence match, which scales options -TdBOELU unless overridden [%d]\n", opt->a);
-	fprintf(stderr, "       -B INT        penalty for a mismatch [%d]\n", opt->b);
-	fprintf(stderr, "       -O INT[,INT]  gap open penalties for deletions and insertions [%d,%d]\n", opt->o_del, opt->o_ins);
-	fprintf(stderr, "       -E INT[,INT]  gap extension penalty; a gap of size k cost '{-O} + {-E}*k' [%d,%d]\n", opt->e_del, opt->e_ins);
-	fprintf(stderr, "       -L INT[,INT]  penalty for 5'- and 3'-end clipping [%d,%d]\n", opt->pen_clip5, opt->pen_clip3);
-	fprintf(stderr, "       -U INT        penalty for an unpaired read pair [%d]\n\n", opt->pen_unpaired);
-	fprintf(stderr, "       -x STR        read type. Setting -x changes multiple parameters unless overridden [null]\n");
-	fprintf(stderr, "                     pacbio: -k17 -W40 -r10 -A1 -B1 -O1 -E1 -L0  (PacBio reads to ref)\n");
-	fprintf(stderr, "                     ont2d: -k14 -W20 -r10 -A1 -B1 -O1 -E1 -L0  (Oxford Nanopore 2D-reads to ref)\n");
-	fprintf(stderr, "                     intractg: -B9 -O16 -L5  (intra-species contigs to ref)\n");
-	fprintf(stderr, "\n");
-	fprintf(stderr, "Input/output options:\n\n");
-	fprintf(stderr, "       -p            smart pairing (ignoring in2.fq)\n");
-	fprintf(stderr, "       -R STR        read group header line such as '@RG\\tID:foo\\tSM:bar' [null]\n");
-	fprintf(stderr, "       -H STR/FILE   insert STR to header if it starts with @; or insert lines in FILE [null]\n");
-	fprintf(stderr, "       -o FILE       sam file to output results to [stdout]\n");
-	fprintf(stderr, "       -j            treat ALT contigs as part of the primary assembly (i.e. ignore <idxbase>.alt file)\n");
-	fprintf(stderr, "       -5            for split alignment, take the alignment with the smallest coordinate as primary\n");
-	fprintf(stderr, "       -q            don't modify mapQ of supplementary alignments\n");
-	fprintf(stderr, "       -K INT        process INT input bases in each batch regardless of nThreads (for reproducibility) []\n");
-	fprintf(stderr, "       -v INT        verbosity level: 1=error, 2=warning, 3=message, 4+=debugging [%d]\n", bwa_verbose);
-	fprintf(stderr, "       -T INT        minimum score to output [%d]\n", opt->T);
-	fprintf(stderr, "       -h INT[,INT]  if there are <INT hits with score >80%% of the max score, output all in XA [%d,%d]\n", opt->max_XA_hits, opt->max_XA_hits_alt);
-	fprintf(stderr, "       -a            output all alignments for SE or unpaired PE\n");
-	fprintf(stderr, "       -C            append FASTA/FASTQ comment to SAM output\n");
-	fprintf(stderr, "       -V            output the reference FASTA header in the XR tag\n");
-	fprintf(stderr, "       -Y            use soft clipping for supplementary alignments\n");
-	fprintf(stderr, "       -M            mark shorter split hits as secondary\n\n");
-	fprintf(stderr, "       -I FLOAT[,FLOAT[,INT[,INT]]]\n");
-	fprintf(stderr, "                     specify the mean, standard deviation (10%% of the mean if absent), max\n");
-	fprintf(stderr, "                     (4 sigma from the mean if absent) and min of the insert size distribution.\n");
-	fprintf(stderr, "                     FR orientation only. [inferred]\n");
-	fprintf(stderr, "\n");
-	fprintf(stderr, "Note: CompSeed accelerates BWA-MEM seeding using the redundancy information exploited by tailored\n"
-	                "NGS compressors, such as SPRING, Minicom and PgRC. It takes the decompressed/reordered reads as\n"
-	                "input, not directly supporting compression format and paired-end reads yet.\n");
-	fprintf(stderr, "\n");
-}
-
-void display_profile(const thread_aux_t &t) {
-	fprintf(stderr, "BWT-extend:  %ld queries, %ld calls, %.2f %% hit in SST\n",
-	        t.bwt_query_times, t.bwt_call_times, 100.0 * (t.bwt_query_times - t.bwt_call_times) / t.bwt_query_times);
-	fprintf(stderr, "SA Lookup:   %ld queries, %ld calls, %.2f %% merged\n",
-	        t.sal_query_times, t.sal_call_times, 100.0 * (t.sal_query_times - t.sal_call_times) / t.sal_query_times);
-	fprintf(stderr, "Wall time: BWT %.2f, SAL %.2f, DP %.2f seconds\n", t.bwt_real, t.sal_real, t.ext_real);
-}
-
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
 	mem_opt_t *opt, opt0;
 	int fd, fd2, i, c, ignore_alt = 0, no_mt_io = 0;
 	int fixed_chunk_size = -1;
@@ -292,7 +192,7 @@ int main(int argc, char *argv[]) {
 				FILE *fp;
 				if ((fp = fopen(optarg, "r")) != 0) {
 					char *buf;
-					buf = (char*) calloc(1, 0x10000);
+					buf = calloc(1, 0x10000);
 					while (fgets(buf, 0xffff, fp)) {
 						i = strlen(buf);
 						assert(buf[i-1] == '\n'); // a long line
@@ -319,24 +219,72 @@ int main(int argc, char *argv[]) {
 				pes[1].low  = (int)(strtod(p+1, &p) + .499);
 			if (bwa_verbose >= 3)
 				fprintf(stderr, "[M::%s] mean insert size: %.3f, stddev: %.3f, max: %d, min: %d\n",
-				        __func__, pes[1].avg, pes[1].std, pes[1].high, pes[1].low);
+						__func__, pes[1].avg, pes[1].std, pes[1].high, pes[1].low);
 		}
 		else return 1;
-	}
-	if (argc - optind == 3) {
-		fprintf(stderr, "[E::%s] Paired-end CompSeed still under development...\n", __func__);
-		free(opt);
-		return 1;
-	}
-	if (argc - optind != 2) {
-		print_usage(opt);
-		free(opt);
-		return 1;
 	}
 
 	if (rg_line) {
 		hdr_line = bwa_insert_header(rg_line, hdr_line);
 		free(rg_line);
+	}
+
+	if (opt->n_threads < 1) opt->n_threads = 1;
+	if (optind + 1 >= argc || optind + 3 < argc) {
+		fprintf(stderr, "\n");
+		fprintf(stderr, "Usage: bwa mem [options] <idxbase> <in1.fq> [in2.fq]\n\n");
+		fprintf(stderr, "Algorithm options:\n\n");
+		fprintf(stderr, "       -t INT        number of threads [%d]\n", opt->n_threads);
+		fprintf(stderr, "       -k INT        minimum seed length [%d]\n", opt->min_seed_len);
+		fprintf(stderr, "       -w INT        band width for banded alignment [%d]\n", opt->w);
+		fprintf(stderr, "       -d INT        off-diagonal X-dropoff [%d]\n", opt->zdrop);
+		fprintf(stderr, "       -r FLOAT      look for internal seeds inside a seed longer than {-k} * FLOAT [%g]\n", opt->split_factor);
+		fprintf(stderr, "       -y INT        seed occurrence for the 3rd round seeding [%ld]\n", (long)opt->max_mem_intv);
+//		fprintf(stderr, "       -s INT        look for internal seeds inside a seed with less than INT occ [%d]\n", opt->split_width);
+		fprintf(stderr, "       -c INT        skip seeds with more than INT occurrences [%d]\n", opt->max_occ);
+		fprintf(stderr, "       -D FLOAT      drop chains shorter than FLOAT fraction of the longest overlapping chain [%.2f]\n", opt->drop_ratio);
+		fprintf(stderr, "       -W INT        discard a chain if seeded bases shorter than INT [0]\n");
+		fprintf(stderr, "       -m INT        perform at most INT rounds of mate rescues for each read [%d]\n", opt->max_matesw);
+		fprintf(stderr, "       -S            skip mate rescue\n");
+		fprintf(stderr, "       -P            skip pairing; mate rescue performed unless -S also in use\n");
+		fprintf(stderr, "\nScoring options:\n\n");
+		fprintf(stderr, "       -A INT        score for a sequence match, which scales options -TdBOELU unless overridden [%d]\n", opt->a);
+		fprintf(stderr, "       -B INT        penalty for a mismatch [%d]\n", opt->b);
+		fprintf(stderr, "       -O INT[,INT]  gap open penalties for deletions and insertions [%d,%d]\n", opt->o_del, opt->o_ins);
+		fprintf(stderr, "       -E INT[,INT]  gap extension penalty; a gap of size k cost '{-O} + {-E}*k' [%d,%d]\n", opt->e_del, opt->e_ins);
+		fprintf(stderr, "       -L INT[,INT]  penalty for 5'- and 3'-end clipping [%d,%d]\n", opt->pen_clip5, opt->pen_clip3);
+		fprintf(stderr, "       -U INT        penalty for an unpaired read pair [%d]\n\n", opt->pen_unpaired);
+		fprintf(stderr, "       -x STR        read type. Setting -x changes multiple parameters unless overridden [null]\n");
+		fprintf(stderr, "                     pacbio: -k17 -W40 -r10 -A1 -B1 -O1 -E1 -L0  (PacBio reads to ref)\n");
+		fprintf(stderr, "                     ont2d: -k14 -W20 -r10 -A1 -B1 -O1 -E1 -L0  (Oxford Nanopore 2D-reads to ref)\n");
+		fprintf(stderr, "                     intractg: -B9 -O16 -L5  (intra-species contigs to ref)\n");
+		fprintf(stderr, "\nInput/output options:\n\n");
+		fprintf(stderr, "       -p            smart pairing (ignoring in2.fq)\n");
+		fprintf(stderr, "       -R STR        read group header line such as '@RG\\tID:foo\\tSM:bar' [null]\n");
+		fprintf(stderr, "       -H STR/FILE   insert STR to header if it starts with @; or insert lines in FILE [null]\n");
+		fprintf(stderr, "       -o FILE       sam file to output results to [stdout]\n");
+		fprintf(stderr, "       -j            treat ALT contigs as part of the primary assembly (i.e. ignore <idxbase>.alt file)\n");
+		fprintf(stderr, "       -5            for split alignment, take the alignment with the smallest coordinate as primary\n");
+		fprintf(stderr, "       -q            don't modify mapQ of supplementary alignments\n");
+		fprintf(stderr, "       -K INT        process INT input bases in each batch regardless of nThreads (for reproducibility) []\n");
+		fprintf(stderr, "\n");
+		fprintf(stderr, "       -v INT        verbosity level: 1=error, 2=warning, 3=message, 4+=debugging [%d]\n", bwa_verbose);
+		fprintf(stderr, "       -T INT        minimum score to output [%d]\n", opt->T);
+		fprintf(stderr, "       -h INT[,INT]  if there are <INT hits with score >80%% of the max score, output all in XA [%d,%d]\n", opt->max_XA_hits, opt->max_XA_hits_alt);
+		fprintf(stderr, "       -a            output all alignments for SE or unpaired PE\n");
+		fprintf(stderr, "       -C            append FASTA/FASTQ comment to SAM output\n");
+		fprintf(stderr, "       -V            output the reference FASTA header in the XR tag\n");
+		fprintf(stderr, "       -Y            use soft clipping for supplementary alignments\n");
+		fprintf(stderr, "       -M            mark shorter split hits as secondary\n\n");
+		fprintf(stderr, "       -I FLOAT[,FLOAT[,INT[,INT]]]\n");
+		fprintf(stderr, "                     specify the mean, standard deviation (10%% of the mean if absent), max\n");
+		fprintf(stderr, "                     (4 sigma from the mean if absent) and min of the insert size distribution.\n");
+		fprintf(stderr, "                     FR orientation only. [inferred]\n");
+		fprintf(stderr, "\n");
+		fprintf(stderr, "Note: Please read the man page for detailed description of the command line and options.\n");
+		fprintf(stderr, "\n");
+		free(opt);
+		return 1;
 	}
 
 	if (mode) {
@@ -376,64 +324,43 @@ int main(int argc, char *argv[]) {
 		if ((aux.idx = bwa_idx_load(argv[optind], BWA_IDX_ALL)) == 0) return 1; // FIXME: memory leak
 	} else if (bwa_verbose >= 3)
 		fprintf(stderr, "[M::%s] load the bwa index from shared memory\n", __func__);
-	if (ignore_alt) {
+	if (ignore_alt)
 		for (i = 0; i < aux.idx->bns->n_seqs; ++i)
 			aux.idx->bns->anns[i].is_alt = 0;
-	}
 
-	int is_fastq = 1; // The input may be only reordered reads
-	fp = gzopen(argv[optind + 1], "r");
-	if (fp != nullptr) {
-		char first = ' ';
-		gzread(fp, &first, sizeof(char));
-		if (first != '@') is_fastq = 0;
-		gzclose(fp);
+	ko = kopen(argv[optind + 1], &fd);
+	if (ko == 0) {
+		if (bwa_verbose >= 1) fprintf(stderr, "[E::%s] fail to open file `%s'.\n", __func__, argv[optind + 1]);
+		return 1;
 	}
-	if (is_fastq) {
-		ko = kopen(argv[optind + 1], &fd);
-		if (ko == 0) {
-			if (bwa_verbose >= 1) fprintf(stderr, "[E::%s] fail to open file `%s'.\n", __func__, argv[optind + 1]);
-			return 1;
+	fp = gzdopen(fd, "r");
+	aux.ks = kseq_init(fp);
+	if (optind + 2 < argc) {
+		if (opt->flag&MEM_F_PE) {
+			if (bwa_verbose >= 2)
+				fprintf(stderr, "[W::%s] when '-p' is in use, the second query file is ignored.\n", __func__);
+		} else {
+			ko2 = kopen(argv[optind + 2], &fd2);
+			if (ko2 == 0) {
+				if (bwa_verbose >= 1) fprintf(stderr, "[E::%s] fail to open file `%s'.\n", __func__, argv[optind + 2]);
+				return 1;
+			}
+			fp2 = gzdopen(fd2, "r");
+			aux.ks2 = kseq_init(fp2);
+			opt->flag |= MEM_F_PE;
 		}
-		fp = gzdopen(fd, "r");
-		aux.ks = kseq_init(fp);
-	} else {
-		aux.ks = nullptr;
-		aux.fp = gzopen(argv[optind + 1], "r");
 	}
-//	if (optind + 2 < argc) {
-//		if (opt->flag&MEM_F_PE) {
-//			if (bwa_verbose >= 2)
-//				fprintf(stderr, "[W::%s] when '-p' is in use, the second query file is ignored.\n", __func__);
-//		} else {
-//			ko2 = kopen(argv[optind + 2], &fd2);
-//			if (ko2 == 0) {
-//				if (bwa_verbose >= 1) fprintf(stderr, "[E::%s] fail to open file `%s'.\n", __func__, argv[optind + 2]);
-//				return 1;
-//			}
-//			fp2 = gzdopen(fd2, "r");
-//			aux.ks2 = kseq_init(fp2);
-//			opt->flag |= MEM_F_PE;
-//		}
-//	}
 	bwa_print_sam_hdr(aux.idx->bns, hdr_line);
 	aux.actual_chunk_size = fixed_chunk_size > 0? fixed_chunk_size : opt->chunk_size * opt->n_threads;
 	kt_pipeline(no_mt_io? 1 : 2, process, &aux, 3);
 	free(hdr_line);
 	free(opt);
 	bwa_idx_destroy(aux.idx);
-	if (is_fastq) {
-		kseq_destroy(aux.ks);
-		err_gzclose(fp); kclose(ko);
-	} else {
-		gzclose(aux.fp);
+	kseq_destroy(aux.ks);
+	err_gzclose(fp); kclose(ko);
+	if (aux.ks2) {
+		kseq_destroy(aux.ks2);
+		err_gzclose(fp2); kclose(ko2);
 	}
-//	if (aux.ks2) {
-//		kseq_destroy(aux.ks2);
-//		err_gzclose(fp2); kclose(ko2);
-//	}
-
-	// Profiling
-	display_profile(tprof);
 	return 0;
 }

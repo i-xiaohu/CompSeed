@@ -34,11 +34,15 @@ set(bwalib
 add_executable(bwaidx ${FM_index} ${bwalib} FM_index/index_main.c)
 target_link_libraries(bwaidx -lz -lrt)
 
-add_executable(bwamem_seeding ${cstl} ${FM_index} ${bwalib} seeding/bwa_seeding.c)
-target_link_libraries(bwamem_seeding -lm -lz -lpthread -lrt)
+add_executable(bwamem ${cstl} ${FM_index} ${bwalib}
+        mapping/bwamem.c mapping/bwamem.h
+        mapping/bwamem_pair.c
+        mapping/bwamem_extra.c
+        mapping/fastmap.c)
+target_link_libraries(bwamem -lm -lz -lpthread -lrt)
 
 add_executable(CompSeed ${cstl} ${FM_index} ${bwalib}
-        seeding/comp_seed.cpp seeding/comp_seed.h
-        seeding/SST.cpp seeding/SST.cpp
+        mapping/comp_seed.cpp mapping/comp_seed.h
+        mapping/SST.cpp mapping/SST.cpp
         main.cpp)
 target_link_libraries(CompSeed -lm -lz -lpthread -lrt)
