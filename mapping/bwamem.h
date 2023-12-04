@@ -1,6 +1,8 @@
 #ifndef BWAMEM_H_
 #define BWAMEM_H_
 
+#include <x86intrin.h>
+
 #include "../FM_index/bntseq.h"
 #include "../FM_index/bwt.h"
 #include "../bwalib/bwa.h"
@@ -14,7 +16,8 @@ typedef struct __smem_i smem_i;
 // Profiling the time cost and BWT/SAL calls of BWA-MEM
 typedef struct {
 	long bwt_call, sal_call;
-	double bwt_time, sal_time, ext_time;
+	uint64_t first, second, third;
+	uint64_t bwt_time, sal_time, ext_time;
 	long padding[512]; // Avoid cache contention
 } profile_t;
 

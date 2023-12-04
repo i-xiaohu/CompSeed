@@ -10,7 +10,7 @@
 #include "bwalib/utils.h"
 #include "bwalib/kopen.h"
 #include "cstl/kthread.h"
-#include "mapping//comp_seed.h"
+#include "mapping/comp_seed.h"
 
 thread_aux_t tprof;
 
@@ -201,11 +201,16 @@ static void print_usage(const mem_opt_t *opt) {
 }
 
 void display_profile(const thread_aux_t &t) {
+	// CPU frequency: CPU cycles each second
+	uint64_t tim = __rdtsc(); sleep(1); uint64_t cf = __rdtsc() - tim;
 	fprintf(stderr, "BWT-extend:  %ld queries, %ld calls, %.2f %% hit in SST\n",
 	        t.bwt_query_times, t.bwt_call_times, 100.0 * (t.bwt_query_times - t.bwt_call_times) / t.bwt_query_times);
 	fprintf(stderr, "SA Lookup:   %ld queries, %ld calls, %.2f %% merged\n",
 	        t.sal_query_times, t.sal_call_times, 100.0 * (t.sal_query_times - t.sal_call_times) / t.sal_query_times);
-	fprintf(stderr, "Wall time: BWT %.2f, SAL %.2f, DP %.2f seconds\n", t.bwt_real, t.sal_real, t.ext_real);
+	fprintf(stderr, "Wall time:   BWT %.2f SAL %.2f DP %.2f seconds\n",
+	        (double)t.bwt_real/cf, (double)t.sal_real/cf, (double)t.ext_real/cf);
+	fprintf(stderr, "BWT stage:   %.2f %.2f %.2f seconds\n",
+	        (double)t.first/cf, (double)t.second/cf, (double)t.third/cf);
 }
 
 int main(int argc, char *argv[]) {

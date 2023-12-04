@@ -217,6 +217,7 @@ static void smem_aux_destroy(smem_aux_t *a)
 
 static void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a, int tid)
 {
+	uint64_t t_start = __rdtsc();
 	int i, k, x = 0, old_n;
 	int start_width = 1;
 	int split_len = (int)(opt->min_seed_len * opt->split_factor + .499);
@@ -233,7 +234,9 @@ static void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, co
 			}
 		} else ++x;
 	}
+	thr_prof[tid].first += __rdtsc() - t_start;
 	// second pass: find MEMs inside a long SMEM
+	t_start = __rdtsc();
 	old_n = a->mem.n;
 	for (k = 0; k < old_n; ++k) {
 		bwtintv_t *p = &a->mem.a[k];
@@ -244,7 +247,9 @@ static void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, co
 			if ((uint32_t)a->mem1.a[i].info - (a->mem1.a[i].info>>32) >= opt->min_seed_len)
 				kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
 	}
+	thr_prof[tid].second += __rdtsc() - t_start;
 	// third pass: LAST-like
+	t_start = __rdtsc();
 	if (opt->max_mem_intv > 0) {
 		x = 0;
 		while (x < len) {
@@ -261,6 +266,7 @@ static void mem_collect_intv(const mem_opt_t *opt, const bwt_t *bwt, int len, co
 			} else ++x;
 		}
 	}
+	thr_prof[tid].third += __rdtsc() - t_start;
 	// sort
 	ks_introsort(mem_intv, a->mem.n, a->mem.a);
 }
@@ -362,13 +368,13 @@ mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 	if (len < opt->min_seed_len) return chain; // if the query is shorter than the seed length, no match
 	tree = kb_init(chn, KB_DEFAULT_SIZE);
 
+	uint64_t t_start = __rdtsc();
 	aux = buf? (smem_aux_t*)buf : smem_aux_init();
-	double t_start = realtime();
 	mem_collect_intv(opt, bwt, len, seq, aux, tid);
-	thr_prof[tid].bwt_time += realtime() - t_start;
+	thr_prof[tid].bwt_time += __rdtsc() - t_start;
 
-	double sal_time = 0; // Separate SAL from chaining
-	t_start = realtime();
+	uint64_t sal_time = 0; // Separate SAL from chaining
+	t_start = __rdtsc();
 	for (i = 0, b = e = l_rep = 0; i < aux->mem.n; ++i) { // compute frac_rep
 		bwtintv_t *p = &aux->mem.a[i];
 		int sb = (p->info>>32), se = (uint32_t)p->info;
@@ -387,10 +393,12 @@ mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 			mem_chain_t tmp, *lower, *upper;
 			mem_seed_t s;
 			int rid, to_add = 0;
-			double t_start2 = realtime(); // Is the overhead of calling realtime() significant?
+
+			uint64_t t_start2 = __rdtsc();
 			s.rbeg = tmp.pos = bwt_sa(bwt, p->x[0] + k); // this is the base coordinate in the forward-reverse reference
+			sal_time += __rdtsc() - t_start2;
 			thr_prof[tid].sal_call++;
-			sal_time += realtime() - t_start2;
+
 			s.qbeg = p->info>>32;
 			s.score= s.len = slen;
 			rid = bns_intv2rid(bns, s.rbeg, s.rbeg + s.len);
@@ -421,8 +429,8 @@ mem_chain_v mem_chain(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 	if (bwa_verbose >= 4) printf("* fraction of repetitive seeds: %.3f\n", (float)l_rep / len);
 
 	kb_destroy(chn, tree);
+	thr_prof[tid].ext_time += (__rdtsc() - t_start) - sal_time;
 	thr_prof[tid].sal_time += sal_time;
-	thr_prof[tid].ext_time += (realtime() - t_start) - sal_time;
 	return chain;
 }
 
@@ -1169,7 +1177,7 @@ mem_alnreg_v mem_align1_core(const mem_opt_t *opt, const bwt_t *bwt, const bntse
 		seq[i] = seq[i] < 4? seq[i] : nst_nt4_table[(int)seq[i]];
 
 	chn = mem_chain(opt, bwt, bns, l_seq, (uint8_t*)seq, buf, tid);
-	double t_start = realtime();
+	uint64_t t_start = __rdtsc();
 	chn.n = mem_chain_flt(opt, chn.n, chn.a);
 	mem_flt_chained_seeds(opt, bns, pac, l_seq, (uint8_t*)seq, chn.n, chn.a);
 	if (bwa_verbose >= 4) mem_print_chain(bns, &chn);
@@ -1195,7 +1203,7 @@ mem_alnreg_v mem_align1_core(const mem_opt_t *opt, const bwt_t *bwt, const bntse
 		if (p->rid >= 0 && bns->anns[p->rid].is_alt)
 			p->is_alt = 1;
 	}
-	thr_prof[tid].ext_time += realtime() - t_start;
+	thr_prof[tid].ext_time += __rdtsc() - t_start;
 	return regs;
 }
 
@@ -1299,7 +1307,7 @@ static void worker1(void *data, int i, int tid)
 
 static void worker2(void *data, int i, int tid)
 {
-	double t_start = realtime();
+	uint64_t t_start = __rdtsc();
 	worker_t *w = (worker_t*)data;
 	if (!(w->opt->flag&MEM_F_PE)) {
 		if (bwa_verbose >= 4) printf("=====> Finalizing read '%s' <=====\n", w->seqs[i].name);
@@ -1312,7 +1320,7 @@ static void worker2(void *data, int i, int tid)
 		mem_sam_pe(w->opt, w->bns, w->pac, w->pes, (w->n_processed>>1) + i, &w->seqs[i<<1], &w->regs[i<<1]);
 		free(w->regs[i<<1|0].a); free(w->regs[i<<1|1].a);
 	}
-	thr_prof[tid].ext_time += realtime() - t_start;
+	thr_prof[tid].ext_time += __rdtsc() - t_start;
 }
 
 void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, const uint8_t *pac, int64_t n_processed, int n, bseq1_t *seqs, const mem_pestat_t *pes0)
@@ -1324,7 +1332,7 @@ void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 
 	ctime = cputime(); rtime = realtime();
 	global_bns = bns;
-	thr_prof = (profile_t*) malloc(opt->n_threads * sizeof(profile_t));
+	thr_prof = (profile_t*) calloc(opt->n_threads, sizeof(profile_t));
 	w.regs = malloc(n * sizeof(mem_alnreg_v));
 	w.opt = opt; w.bwt = bwt; w.bns = bns; w.pac = pac;
 	w.seqs = seqs; w.n_processed = n_processed;
@@ -1332,20 +1340,17 @@ void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 	w.aux = malloc(opt->n_threads * sizeof(smem_aux_t));
 	for (i = 0; i < opt->n_threads; ++i)
 		w.aux[i] = smem_aux_init();
-	// Profiling the time of the slowest thread
-	memset(thr_prof, 0, opt->n_threads * sizeof(profile_t));
 	kt_for(opt->n_threads, worker1, &w, (opt->flag&MEM_F_PE)? n>>1 : n); // find mapping positions
-	double max_total = 0; int k = -1;
 	for (i = 0; i < opt->n_threads; i++) {
 		tprof.bwt_call += thr_prof[i].bwt_call;
 		tprof.sal_call += thr_prof[i].sal_call;
-		double total = thr_prof[i].bwt_time + thr_prof[i].sal_time + thr_prof[i].ext_time;
-		if (total > max_total) {
-			max_total = total;
-			k = i;
-		}
+		tprof.bwt_time += thr_prof[i].bwt_time;
+		tprof.sal_time += thr_prof[i].sal_time;
+		tprof.ext_time += thr_prof[i].ext_time;
+		tprof.first += thr_prof[i].first;
+		tprof.second += thr_prof[i].second;
+		tprof.third += thr_prof[i].third;
 	}
-	tprof.bwt_time += thr_prof[k].bwt_time; tprof.sal_time += thr_prof[k].sal_time; tprof.ext_time += thr_prof[k].ext_time;
 	for (i = 0; i < opt->n_threads; ++i)
 		smem_aux_destroy(w.aux[i]);
 	free(w.aux);
@@ -1355,15 +1360,9 @@ void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 	}
 	for (i = 0; i < opt->n_threads; i++) thr_prof[i].ext_time = 0;
 	kt_for(opt->n_threads, worker2, &w, (opt->flag&MEM_F_PE)? n>>1 : n); // generate alignment
-	max_total = 0; k = -1;
 	for (i = 0; i < opt->n_threads; i++) {
-		double total = thr_prof[i].ext_time;
-		if (total > max_total) {
-			max_total = total;
-			k = i;
-		}
+		tprof.ext_time += thr_prof[i].ext_time;
 	}
-	tprof.ext_time += thr_prof[k].ext_time;
 	free(w.regs);
 	free(thr_prof);
 	if (bwa_verbose >= 3)

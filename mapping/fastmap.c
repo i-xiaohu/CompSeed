@@ -156,9 +156,14 @@ static void update_a(mem_opt_t *opt, const mem_opt_t *opt0)
 }
 
 void display_profile(const profile_t *t) {
+	// CPU frequency: CPU cycles each second
+	uint64_t tim = __rdtsc(); sleep(1); uint64_t cf = __rdtsc() - tim;
 	fprintf(stderr, "BWT-extend:  %ld calls\n", t->bwt_call);
 	fprintf(stderr, "SA Lookup:   %ld calls\n", t->sal_call);
-	fprintf(stderr, "Wall time: BWT %.2f, SAL %.2f, DP %.2f seconds\n", t->bwt_time, t->sal_time, t->ext_time);
+	fprintf(stderr, "Wall time:   BWT %.2f SAL %.2f DP %.2f seconds\n",
+	        (double)t->bwt_time/cf, (double)t->sal_time/cf, (double)t->ext_time/cf);
+	fprintf(stderr, "BWT stage:   %.2f %.2f %.2f seconds\n",
+		 (double)t->first/cf, (double)t->second/cf, (double)t->third/cf);
 }
 
 int main(int argc, char *argv[])

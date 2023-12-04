@@ -1148,7 +1148,7 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 	if (n == 0) return;
 
 	// Collect exact matches
-	double real_start = realtime();
+	uint64_t real_start = __rdtsc();
 	auto *opt = w->opt;
 	auto *bwt = w->bwt;
 	auto *bns = w->bns;
@@ -1164,6 +1164,7 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 
 		std::vector<bwtintv_t> &match = aux.match[r]; match.clear();
 		// Seeding
+		uint64_t t_start = __rdtsc();
 		for (int j = 0; j < read.l_seq; ) {
 			j = collect_mem_with_sst(seq, read.l_seq, j, 1, aux);
 			for (const auto &m : aux.super_mem) {
@@ -1171,7 +1172,9 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 					match.push_back(m);
 			}
 		}
+		aux.first += __rdtsc() - t_start;
 		// Re-seeding
+		t_start = __rdtsc();
 		int old_n = (int)match.size();
 		for (int j = 0; j < old_n; j++) {
 			const auto &p = match[j] ;
@@ -1183,7 +1186,9 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 					match.push_back(m);
 			}
 		}
+		aux.second += __rdtsc() - t_start;
 		// 3rd round seeding
+		t_start = __rdtsc();
 		if (opt->max_mem_intv > 0) {
 			for (int j = 0; j < read.l_seq; ) {
 				if (seq[j] < 4) {
@@ -1195,13 +1200,14 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 				}
 			}
 		}
+		aux.third += __rdtsc() - t_start;
 		std::sort(match.begin(), match.end(), mem_cmp);
 	}
 	aux.bwt_call_times += aux.forward_sst->bwt_call + aux.backward_sst->bwt_call;
-	aux.bwt_real += realtime() - real_start;
+	aux.bwt_real += __rdtsc() - real_start;
 
 	// SAL after merging identical seeds
-	real_start = realtime();
+	real_start = __rdtsc();
 	auto unique_sal = aux.unique_sal; unique_sal.clear();
 	for (int r = 0; r < n; r++) {
 		const auto &mem = aux.match[r];
@@ -1231,9 +1237,9 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 		auto &s = aux.seed[p.read_id][p.array_id];
 		s.rbeg = coordinate;
 	}
-	aux.sal_real += realtime() - real_start;
+	aux.sal_real += __rdtsc() - real_start;
 
-	real_start = realtime();
+	real_start = __rdtsc();
 	for (int r = 0; r < n; r++) {
 		auto &read = w->seqs[_start + r];
 		auto *seq = (uint8_t*) read.seq;
@@ -1278,7 +1284,7 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 		mem_reg2sam(opt, bns, pac, &read, &regs, 0, 0);
 		free(regs.a);
 	}
-	aux.ext_real += realtime() - real_start;
+	aux.ext_real += __rdtsc() - real_start;
 }
 
 void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, const uint8_t *pac, int64_t n_processed, int n, bseq1_t *seqs, const mem_pestat_t *pes0) {
@@ -1294,8 +1300,6 @@ void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 		w.aux[i].backward_sst = new SST(bwt);
 	}
 
-	// Profiling the time of the slowest thread
-	for (int i = 0; i < opt->n_threads; i++) w.aux[i].bwt_real = w.aux[i].sal_real = w.aux[i].ext_real = 0;
 	kt_for(
 			opt->n_threads,
 			[](void *d, long i, int t) -> void {
@@ -1304,15 +1308,6 @@ void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 			&w,
 			(n + BATCH_SIZE - 1) / BATCH_SIZE
 	);
-	double max_total = 0; int k = -1;
-	for (int i = 0; i < opt->n_threads; i++) {
-		double total = w.aux[i].bwt_real + w.aux[i].sal_real + w.aux[i].ext_real;
-		if (total > max_total) {
-			max_total = total;
-			k = i;
-		}
-	}
-	tprof.bwt_real += w.aux[k].bwt_real; tprof.sal_real += w.aux[k].sal_real; tprof.ext_real += w.aux[k].ext_real;
 
 	for (int i = 0; i < opt->n_threads; i++) {
 		tprof += w.aux[i];

@@ -7,6 +7,7 @@
 
 #include <string>
 #include <vector>
+#include <x86intrin.h>
 #include "../bwalib/bwa.h"
 #include "../cstl/kvec.h"
 #include "../cstl/kstring.h"
@@ -141,13 +142,20 @@ struct thread_aux_t {
 	// Query and call number of BWT-extend and SAL
 	long sal_call_times = 0, sal_query_times = 0;
 	long bwt_call_times = 0, bwt_query_times = 0;
-	// Wait time of each stage in each thread
-	double bwt_real = 0, sal_real = 0, ext_real = 0;
+	// CPU cycles of each stage for each thread
+	uint64_t bwt_real = 0, sal_real = 0, ext_real = 0;
+	uint64_t first = 0, second = 0, third = 0;
 	void operator += (const thread_aux_t &a) {
 		bwt_call_times += a.bwt_call_times;
 		bwt_query_times += a.bwt_query_times;
 		sal_call_times += a.sal_call_times;
 		sal_query_times += a.sal_query_times;
+		bwt_real += a.bwt_real;
+		sal_real += a.sal_real;
+		ext_real += a.ext_real;
+		first += a.first;
+		second += a.second;
+		third += a.third;
 	}
 };
 
