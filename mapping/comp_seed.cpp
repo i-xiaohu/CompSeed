@@ -15,6 +15,9 @@
 #include "../cstl/ksort.h"
 #include "../bwalib/ksw.h"
 #include "../bwalib/utils.h"
+#include "macro.h"
+#include "bandedSWA.h"
+#include "memcpy_bwamem.h"
 
 extern thread_aux_t tprof;
 
@@ -169,14 +172,6 @@ static std::string mem_str(const bwtintv_t &a) {
 /************
  * Chaining *
  ************/
-
-typedef struct {
-	int n, m, first, rid;
-	uint32_t w:29, kept:2, is_alt:1;
-	float frac_rep;
-	int64_t pos;
-	mem_seed_t *seeds;
-} mem_chain_t;
 
 typedef struct { size_t n, m; mem_chain_t *a;  } mem_chain_v;
 
@@ -1127,9 +1122,30 @@ void mem_reg2sam(const mem_opt_t *opt, const bntseq_t *bns, const uint8_t *pac, 
 	}
 }
 
-/**********
- * Worker *
- **********/
+typedef struct {
+	SeqPair *seqPairArrayAux[MAX_THREADS];
+	SeqPair *seqPairArrayLeft128[MAX_THREADS];
+	SeqPair *seqPairArrayRight128[MAX_THREADS];
+
+	int64_t wsize[MAX_THREADS];
+
+	int64_t wsize_buf_ref[MAX_THREADS*CACHE_LINE];
+	int64_t wsize_buf_qer[MAX_THREADS*CACHE_LINE];
+
+	uint8_t *seqBufLeftRef[MAX_THREADS*CACHE_LINE];
+	uint8_t *seqBufRightRef[MAX_THREADS*CACHE_LINE];
+	uint8_t *seqBufLeftQer[MAX_THREADS*CACHE_LINE];
+	uint8_t *seqBufRightQer[MAX_THREADS*CACHE_LINE];
+
+//	SMEM *matchArray[MAX_THREADS];
+//	int32_t *min_intv_ar[MAX_THREADS];
+//	int32_t *rid[MAX_THREADS];
+	int32_t *lim[MAX_THREADS];
+//	int16_t *query_pos_ar[MAX_THREADS];
+//	uint8_t *enc_qdb[MAX_THREADS];
+
+	int64_t wsize_mem[MAX_THREADS];
+} mem_cache;
 
 typedef struct {
 	int n;
@@ -1140,7 +1156,1088 @@ typedef struct {
 	thread_aux_t *aux;
 	bseq1_t *seqs;
 	int64_t n_processed;
+	mem_cache mmc;
 } worker_t;
+
+void* _mm_realloc(void *ptr, int64_t csize, int64_t nsize, int16_t dsize) {
+	if (nsize <= csize)
+	{
+		fprintf(stderr, "Shringking not supported yet.\n");
+		return ptr;
+	}
+	void *nptr = _mm_malloc(nsize * dsize, 64);
+	assert(nptr != NULL);
+	memcpy_bwamem(nptr, nsize * dsize, ptr, csize, __FILE__, __LINE__);
+	_mm_free(ptr);
+
+	return nptr;
+}
+
+inline void sortPairsLenExt(SeqPair *pairArray, int32_t count, SeqPair *tempArray,
+                            int32_t *hist, int &numPairs128, int &numPairs16,
+                            int &numPairs1, int score_a)
+{
+	int32_t i;
+	numPairs128 = numPairs16 = numPairs1 = 0;
+
+	int32_t *hist2 = hist + MAX_SEQ_LEN8;
+	int32_t *hist3 = hist + MAX_SEQ_LEN8 + MAX_SEQ_LEN16;
+
+	for(i = 0; i <= MAX_SEQ_LEN8 + MAX_SEQ_LEN16; i+=1)
+		//_mm256_store_si256((__m256i *)(hist + i), zero256);
+		hist[i] = 0;
+
+	int *arr = (int*) calloc (count, sizeof(int));
+	assert(arr != NULL);
+
+	for(i = 0; i < count; i++)
+	{
+		SeqPair sp = pairArray[i];
+		// int minval = sp.h0 + max_(sp.len1, sp.len2);
+		int minval = sp.h0 + min_(sp.len1, sp.len2) * score_a;
+		if (sp.len1 < MAX_SEQ_LEN8 && sp.len2 < MAX_SEQ_LEN8 && minval < MAX_SEQ_LEN8)
+			hist[minval]++;
+		else if(sp.len1 < MAX_SEQ_LEN16 && sp.len2 < MAX_SEQ_LEN16 && minval < MAX_SEQ_LEN16)
+			hist2[minval] ++;
+		else
+			hist3[0] ++;
+
+		arr[i] = 0;
+	}
+
+	int32_t cumulSum = 0;
+	for(i = 0; i < MAX_SEQ_LEN8; i++)
+	{
+		int32_t cur = hist[i];
+		hist[i] = cumulSum;
+		cumulSum += cur;
+	}
+	for(i = 0; i < MAX_SEQ_LEN16; i++)
+	{
+		int32_t cur = hist2[i];
+		hist2[i] = cumulSum;
+		cumulSum += cur;
+	}
+	hist3[0] = cumulSum;
+
+	for(i = 0; i < count; i++)
+	{
+		SeqPair sp = pairArray[i];
+		// int minval = sp.h0 + max_(sp.len1, sp.len2);
+		int minval = sp.h0 + min_(sp.len1, sp.len2) * score_a;
+
+		if (sp.len1 < MAX_SEQ_LEN8 && sp.len2 < MAX_SEQ_LEN8 && minval < MAX_SEQ_LEN8)
+		{
+			int32_t pos = hist[minval];
+			tempArray[pos] = sp;
+			hist[minval]++;
+			numPairs128 ++;
+			if (arr[pos] != 0)
+			{
+				fprintf(stderr, "[%s] Error log: repeat, pos: %d, arr: %d, minval: %d, (%d %d)\n",
+				        __func__, pos, arr[pos], minval, sp.len1, sp.len2);
+				exit(EXIT_FAILURE);
+			}
+			arr[pos] = 1;
+		}
+		else if (sp.len1 < MAX_SEQ_LEN16 && sp.len2 < MAX_SEQ_LEN16 && minval < MAX_SEQ_LEN16) {
+			int32_t pos = hist2[minval];
+			tempArray[pos] = sp;
+			hist2[minval]++;
+			numPairs16 ++;
+			if (arr[pos] != 0)
+			{
+				SeqPair spt = pairArray[arr[pos]-1];
+				fprintf(stderr, "[%s] Error log: repeat, "
+				                "i: %d, pos: %d, arr: %d, hist2: %d, minval: %d, (%d %d %d) (%d %d %d)\n",
+				        __func__, i, pos, arr[pos], hist2[minval],  minval, sp.h0, sp.len1, sp.len2,
+				        spt.h0, spt.len1, spt.len2);
+				exit(EXIT_FAILURE);
+			}
+			arr[pos] = i + 1;
+		}
+		else {
+			int32_t pos = hist3[0];
+			tempArray[pos] = sp;
+			hist3[0]++;
+			arr[pos] = i + 1;
+			numPairs1 ++;
+		}
+	}
+
+	for(i = 0; i < count; i++) {
+		pairArray[i] = tempArray[i];
+	}
+
+	free(arr);
+}
+
+inline void sortPairsLen(SeqPair *pairArray, int32_t count, SeqPair *tempArray, int32_t *hist)
+{
+
+	int32_t i;
+#if ((!__AVX512BW__) & (__AVX2__ | __SSE2__))
+	for(i = 0; i <= MAX_SEQ_LEN16; i++) hist[i] = 0;
+#else
+	__m512i zero512 = _mm512_setzero_si512();
+    for(i = 0; i <= MAX_SEQ_LEN16; i+=16)
+    {
+        _mm512_store_si512((__m512i *)(hist + i), zero512);
+    }
+#endif
+
+	for(i = 0; i < count; i++)
+	{
+		SeqPair sp = pairArray[i];
+		hist[sp.len1]++;
+	}
+	int32_t cumulSum = 0;
+	for(i = 0; i <= MAX_SEQ_LEN16; i++)
+	{
+		int32_t cur = hist[i];
+		hist[i] = cumulSum;
+		cumulSum += cur;
+	}
+
+	for(i = 0; i < count; i++)
+	{
+		SeqPair sp = pairArray[i];
+		int32_t pos = hist[sp.len1];
+
+		tempArray[pos] = sp;
+		hist[sp.len1]++;
+	}
+
+	for(i = 0; i < count; i++) {
+		pairArray[i] = tempArray[i];
+	}
+}
+
+/* Restructured BSW parent function */
+#define FAC 8
+#define PFD 2
+void mem_chain2aln_across_reads_V2(const mem_opt_t *opt, const bntseq_t *bns,
+                                   const uint8_t *pac, bseq1_t *seq_, int nseq,
+                                   mem_chain_v* chain_ar, mem_alnreg_v *av_v,
+                                   mem_cache *mmc, int tid)
+{
+	SeqPair *seqPairArrayAux      = mmc->seqPairArrayAux[tid];
+	SeqPair *seqPairArrayLeft128  = mmc->seqPairArrayLeft128[tid];
+	SeqPair *seqPairArrayRight128 = mmc->seqPairArrayRight128[tid];
+	int64_t *wsize_pair = &(mmc->wsize[tid]);
+
+	uint8_t *seqBufLeftRef  = mmc->seqBufLeftRef[tid*CACHE_LINE];
+	uint8_t *seqBufRightRef = mmc->seqBufRightRef[tid*CACHE_LINE];
+	uint8_t *seqBufLeftQer  = mmc->seqBufLeftQer[tid*CACHE_LINE];
+	uint8_t *seqBufRightQer = mmc->seqBufRightQer[tid*CACHE_LINE];
+	int64_t *wsize_buf_ref = &(mmc->wsize_buf_ref[tid*CACHE_LINE]);
+	int64_t *wsize_buf_qer = &(mmc->wsize_buf_qer[tid*CACHE_LINE]);
+
+	// int32_t *lim_g = mmc->lim + (BATCH_SIZE + 32) * tid;
+	int32_t *lim_g = mmc->lim[tid];
+
+	mem_seed_t *s;
+	int64_t l_pac = bns->l_pac, rmax[8] __attribute__((aligned(64)));
+	// std::vector<int8_t> nexitv(nseq, 0);
+
+	int numPairsLeft = 0, numPairsRight = 0;
+	int numPairsLeft1 = 0, numPairsRight1 = 0;
+	int numPairsLeft128 = 0, numPairsRight128 = 0;
+	int numPairsLeft16 = 0, numPairsRight16 = 0;
+
+	int64_t leftRefOffset = 0, rightRefOffset = 0;
+	int64_t leftQerOffset = 0, rightQerOffset = 0;
+
+	int srt_size = MAX_SEEDS_PER_READ, fac = FAC;
+	uint64_t *srt = (uint64_t *) malloc(srt_size * 8);
+	uint32_t *srtgg = (uint32_t*) malloc(nseq * SEEDS_PER_READ * fac * sizeof(uint32_t));
+
+	int spos = 0;
+
+	// uint64_t timUP = __rdtsc();
+	for (int l=0; l<nseq; l++)
+	{
+		int max = 0;
+		uint8_t *rseq = 0;
+
+		uint32_t *srtg = srtgg;
+		lim_g[l+1] = 0;
+
+		const uint8_t *query = (uint8_t *) seq_[l].seq;
+		int l_query = seq_[l].l_seq;
+
+		mem_chain_v *chn = &chain_ar[l];
+		mem_alnreg_v *av = &av_v[l];  // alignment
+		mem_chain_t *c;
+
+		_mm_prefetch((const char*) query, _MM_HINT_NTA);
+
+		// aln mem allocation
+		av->m = 0;
+		for (int j=0; j<chn->n; j++) {
+			c = &chn->a[j]; av->m += c->n;
+		}
+		av->a = (mem_alnreg_t*)calloc(av->m, sizeof(mem_alnreg_t));
+
+		// aln mem allocation ends
+		for (int j=0; j<chn->n; j++)
+		{
+			c = &chn->a[j];
+//			assert(c->seqid == l);
+
+			int64_t tmp = 0;
+			if (c->n == 0) continue;
+
+			_mm_prefetch((const char*) (srtg + spos + 64), _MM_HINT_NTA);
+			_mm_prefetch((const char*) (lim_g), _MM_HINT_NTA);
+
+			// get the max possible span
+			rmax[0] = l_pac<<1; rmax[1] = 0;
+
+			for (int i = 0; i < c->n; ++i) {
+				int64_t b, e;
+				const mem_seed_t *t = &c->seeds[i];
+				b = t->rbeg - (t->qbeg + cal_max_gap(opt, t->qbeg));
+				e = t->rbeg + t->len + ((l_query - t->qbeg - t->len) +
+				                        cal_max_gap(opt, l_query - t->qbeg - t->len));
+
+				tmp = rmax[0];
+				rmax[0] = tmp < b? rmax[0] : b;
+				rmax[1] = (rmax[1] > e)? rmax[1] : e;
+				if (t->len > max) max = t->len;
+			}
+
+			rmax[0] = rmax[0] > 0? rmax[0] : 0;
+			rmax[1] = rmax[1] < l_pac<<1? rmax[1] : l_pac<<1;
+			if (rmax[0] < l_pac && l_pac < rmax[1])
+			{
+				if (c->seeds[0].rbeg < l_pac) rmax[1] = l_pac;
+				else rmax[0] = l_pac;
+			}
+
+			/* retrieve the reference sequence */
+			{
+				int rid = 0;
+				// free rseq
+				rseq = bns_fetch_seq(bns, pac, &rmax[0], c->seeds[0].rbeg, &rmax[1], &rid);
+//				rseq = bns_fetch_seq_v2(bns, pac, &rmax[0],
+//				                        c->seeds[0].rbeg,
+//				                        &rmax[1], &rid, ref_string,
+//				                        (uint8_t*) seqPairArrayAux);
+				assert(c->rid == rid);
+			}
+
+			_mm_prefetch((const char*) rseq, _MM_HINT_NTA);
+			// _mm_prefetch((const char*) rseq + 64, _MM_HINT_NTA);
+
+			// assert(c->n < MAX_SEEDS_PER_READ);  // temp
+			if (c->n > srt_size) {
+				srt_size = c->n + 10;
+				srt = (uint64_t *) realloc(srt, srt_size * 8);
+			}
+
+			for (int i = 0; i < c->n; ++i)
+				srt[i] = (uint64_t)c->seeds[i].score<<32 | i;
+
+			if (c->n > 1)
+				ks_introsort_64(c->n, srt);
+
+			// assert((spos + c->n) < SEEDS_PER_READ * FAC * nseq);
+			if ((spos + c->n) > SEEDS_PER_READ * fac * nseq) {
+				fac <<= 1;
+				srtgg = (uint32_t *) realloc(srtgg, nseq * SEEDS_PER_READ * fac * sizeof(uint32_t));
+			}
+
+			for (int i = 0; i < c->n; ++i)
+				srtg[spos++] = srt[i];
+
+			lim_g[l+1] += c->n;
+
+			// uint64_t tim = __rdtsc();
+			for (int k=c->n-1; k >= 0; k--)
+			{
+				s = &c->seeds[(uint32_t)srt[k]];
+
+				mem_alnreg_t *a;
+				// a = kv_pushp(mem_alnreg_t, *av);
+				a = &av->a[av->n++];
+				memset(a, 0, sizeof(mem_alnreg_t));
+
+				s->aln = av->n-1;
+
+				a->w = opt->w;
+				a->score = a->truesc = -1;
+				a->rid = c->rid;
+				a->frac_rep = c->frac_rep;
+				a->seedlen0 = s->len;
+				a->c = c; //ptr
+				a->rb = a->qb = a->re = a->qe = H0_;
+
+//				tprof[PE19][tid] ++;
+
+				int flag = 0;
+				std::pair<int, int> pr;
+				if (s->qbeg)  // left extension
+				{
+					SeqPair sp;
+					sp.h0 = s->len * opt->a;
+//					sp.seqid = c->seqid;
+					sp.seqid = l;
+					sp.regid = av->n - 1;
+
+					if (numPairsLeft >= *wsize_pair) {
+						fprintf(stderr, "[0000][%0.4d] Re-allocating seqPairArrays, in Left\n", tid);
+						*wsize_pair += 1024;
+						seqPairArrayAux = (SeqPair *) realloc(seqPairArrayAux,
+						                                      (*wsize_pair + MAX_LINE_LEN)
+						                                      * sizeof(SeqPair));
+						mmc->seqPairArrayAux[tid] = seqPairArrayAux;
+						seqPairArrayLeft128 = (SeqPair *) realloc(seqPairArrayLeft128,
+						                                          (*wsize_pair + MAX_LINE_LEN)
+						                                          * sizeof(SeqPair));
+						mmc->seqPairArrayLeft128[tid] = seqPairArrayLeft128;
+						seqPairArrayRight128 = (SeqPair *) realloc(seqPairArrayRight128,
+						                                           (*wsize_pair + MAX_LINE_LEN)
+						                                           * sizeof(SeqPair));
+						mmc->seqPairArrayRight128[tid] = seqPairArrayRight128;
+					}
+
+
+					sp.idq = leftQerOffset;
+					sp.idr = leftRefOffset;
+
+					leftQerOffset += s->qbeg;
+					if (leftQerOffset >= *wsize_buf_qer)
+					{
+						fprintf(stderr, "[%0.4d] Re-allocating (doubling) seqBufQers in %s (left)\n",
+						        tid, __func__);
+						int64_t tmp = *wsize_buf_qer;
+						*wsize_buf_qer *= 2;
+						uint8_t *seqBufQer_ = (uint8_t*)
+								_mm_realloc(seqBufLeftQer, tmp, *wsize_buf_qer, sizeof(uint8_t));
+						mmc->seqBufLeftQer[tid*CACHE_LINE] = seqBufLeftQer = seqBufQer_;
+
+						seqBufQer_ = (uint8_t*)
+								_mm_realloc(seqBufRightQer, tmp, *wsize_buf_qer, sizeof(uint8_t));
+						mmc->seqBufRightQer[tid*CACHE_LINE] = seqBufRightQer = seqBufQer_;
+					}
+
+					uint8_t *qs = seqBufLeftQer + sp.idq;
+					for (int i = 0; i < s->qbeg; ++i) qs[i] = query[s->qbeg - 1 - i];
+
+					tmp = s->rbeg - rmax[0];
+					leftRefOffset += tmp;
+					if (leftRefOffset >= *wsize_buf_ref)
+					{
+						fprintf(stderr, "[%0.4d] Re-allocating (doubling) seqBufRefs in %s (left)\n",
+						        tid, __func__);
+						int64_t tmp = *wsize_buf_ref;
+						*wsize_buf_ref *= 2;
+						uint8_t *seqBufRef_ = (uint8_t*)
+								_mm_realloc(seqBufLeftRef, tmp, *wsize_buf_ref, sizeof(uint8_t));
+						mmc->seqBufLeftRef[tid*CACHE_LINE] = seqBufLeftRef = seqBufRef_;
+
+						seqBufRef_ = (uint8_t*)
+								_mm_realloc(seqBufRightRef, tmp, *wsize_buf_ref, sizeof(uint8_t));
+						mmc->seqBufRightRef[tid*CACHE_LINE] = seqBufRightRef = seqBufRef_;
+					}
+
+					uint8_t *rs = seqBufLeftRef + sp.idr;
+					for (int64_t i = 0; i < tmp; ++i) rs[i] = rseq[tmp - 1 - i]; //seq1
+
+					sp.len2 = s->qbeg;
+					sp.len1 = tmp;
+					int minval = sp.h0 + min_(sp.len1, sp.len2) * opt->a;
+
+					if (sp.len1 < MAX_SEQ_LEN8 && sp.len2 < MAX_SEQ_LEN8 && minval < MAX_SEQ_LEN8) {
+						numPairsLeft128++;
+					}
+					else if (sp.len1 < MAX_SEQ_LEN16 && sp.len2 < MAX_SEQ_LEN16 && minval < MAX_SEQ_LEN16){
+						numPairsLeft16++;
+					}
+					else {
+						numPairsLeft1++;
+					}
+
+					seqPairArrayLeft128[numPairsLeft] = sp;
+					numPairsLeft ++;
+					a->qb = s->qbeg; a->rb = s->rbeg;
+				}
+				else
+				{
+					flag = 1;
+					a->score = a->truesc = s->len * opt->a, a->qb = 0, a->rb = s->rbeg;
+				}
+
+				if (s->qbeg + s->len != l_query)  // right extension
+				{
+					int64_t qe = s->qbeg + s->len;
+					int64_t re = s->rbeg + s->len - rmax[0];
+					assert(re >= 0);
+					SeqPair sp;
+
+					sp.h0 = H0_; //random number
+//					sp.seqid = c->seqid;
+					sp.seqid = l;
+					sp.regid = av->n - 1;
+
+					if (numPairsRight >= *wsize_pair)
+					{
+						fprintf(stderr, "[0000] [%0.4d] Re-allocating seqPairArrays Right\n", tid);
+						*wsize_pair += 1024;
+						seqPairArrayAux = (SeqPair *) realloc(seqPairArrayAux,
+						                                      (*wsize_pair + MAX_LINE_LEN)
+						                                      * sizeof(SeqPair));
+						mmc->seqPairArrayAux[tid] = seqPairArrayAux;
+						seqPairArrayLeft128 = (SeqPair *) realloc(seqPairArrayLeft128,
+						                                          (*wsize_pair + MAX_LINE_LEN)
+						                                          * sizeof(SeqPair));
+						mmc->seqPairArrayLeft128[tid] = seqPairArrayLeft128;
+						seqPairArrayRight128 = (SeqPair *) realloc(seqPairArrayRight128,
+						                                           (*wsize_pair + MAX_LINE_LEN)
+						                                           * sizeof(SeqPair));
+						mmc->seqPairArrayRight128[tid] = seqPairArrayRight128;
+					}
+
+					sp.len2 = l_query - qe;
+					sp.len1 = rmax[1] - rmax[0] - re;
+
+					sp.idq = rightQerOffset;
+					sp.idr = rightRefOffset;
+
+					rightQerOffset += sp.len2;
+					if (rightQerOffset >= *wsize_buf_qer)
+					{
+						fprintf(stderr, "[%0.4d] Re-allocating (doubling) seqBufQers in %s (right)\n",
+						        tid, __func__);
+						int64_t tmp = *wsize_buf_qer;
+						*wsize_buf_qer *= 2;
+						uint8_t *seqBufQer_ = (uint8_t*)
+								_mm_realloc(seqBufLeftQer, tmp, *wsize_buf_qer, sizeof(uint8_t));
+						mmc->seqBufLeftQer[tid*CACHE_LINE] = seqBufLeftQer = seqBufQer_;
+
+						seqBufQer_ = (uint8_t*)
+								_mm_realloc(seqBufRightQer, tmp, *wsize_buf_qer, sizeof(uint8_t));
+						mmc->seqBufRightQer[tid*CACHE_LINE] = seqBufRightQer = seqBufQer_;
+					}
+
+					rightRefOffset += sp.len1;
+					if (rightRefOffset >= *wsize_buf_ref)
+					{
+						fprintf(stderr, "[%0.4d] Re-allocating (doubling) seqBufRefs in %s (right)\n",
+						        tid, __func__);
+						int64_t tmp = *wsize_buf_ref;
+						*wsize_buf_ref *= 2;
+						uint8_t *seqBufRef_ = (uint8_t*)
+								_mm_realloc(seqBufLeftRef, tmp, *wsize_buf_ref, sizeof(uint8_t));
+						mmc->seqBufLeftRef[tid*CACHE_LINE] = seqBufLeftRef = seqBufRef_;
+
+						seqBufRef_ = (uint8_t*)
+								_mm_realloc(seqBufRightRef, tmp, *wsize_buf_ref, sizeof(uint8_t));
+						mmc->seqBufRightRef[tid*CACHE_LINE] = seqBufRightRef = seqBufRef_;
+					}
+
+//					tprof[PE23][tid] += sp.len1 + sp.len2;
+
+					uint8_t *qs = seqBufRightQer + sp.idq;
+					uint8_t *rs = seqBufRightRef + sp.idr;
+
+					for (int i = 0; i < sp.len2; ++i) qs[i] = query[qe + i];
+
+					for (int i = 0; i < sp.len1; ++i) rs[i] = rseq[re + i]; //seq1
+
+					int minval = sp.h0 + min_(sp.len1, sp.len2) * opt->a;
+
+					if (sp.len1 < MAX_SEQ_LEN8 && sp.len2 < MAX_SEQ_LEN8 && minval < MAX_SEQ_LEN8) {
+						numPairsRight128++;
+					}
+					else if(sp.len1 < MAX_SEQ_LEN16 && sp.len2 < MAX_SEQ_LEN16 && minval < MAX_SEQ_LEN16) {
+						numPairsRight16++;
+					}
+					else {
+						numPairsRight1++;
+					}
+					seqPairArrayRight128[numPairsRight] = sp;
+					numPairsRight ++;
+					a->qe = qe; a->re = rmax[0] + re;
+				}
+				else
+				{
+					a->qe = l_query, a->re = s->rbeg + s->len;
+					// seedcov business, this "if" block should be redundant, check and remove.
+					if (a->rb != H0_ && a->qb != H0_)
+					{
+						int i;
+						for (i = 0, a->seedcov = 0; i < c->n; ++i)
+						{
+							const mem_seed_t *t = &c->seeds[i];
+							if (t->qbeg >= a->qb && t->qbeg + t->len <= a->qe &&
+							    t->rbeg >= a->rb && t->rbeg + t->len <= a->re) // seed fully contained
+								a->seedcov += t->len;
+						}
+					}
+				}
+			}
+			free(rseq);
+			// tprof[MEM_ALN2_DOWN1][tid] += __rdtsc() - tim;
+		}
+	}
+	// tprof[MEM_ALN2_UP][tid] += __rdtsc() - timUP;
+
+
+	int32_t *hist = (int32_t *)_mm_malloc((MAX_SEQ_LEN8 + MAX_SEQ_LEN16 + 32) *
+	                                      sizeof(int32_t), 64);
+
+	/* Sorting based score is required as that affects the use of SIMD lanes */
+	sortPairsLenExt(seqPairArrayLeft128, numPairsLeft, seqPairArrayAux, hist,
+	                numPairsLeft128, numPairsLeft16, numPairsLeft1, opt->a);
+	assert(numPairsLeft == (numPairsLeft128 + numPairsLeft16 + numPairsLeft1));
+
+
+	// SWA
+	// uint64_t timL = __rdtsc();
+	int nthreads = 1;
+
+	// Now, process all the collected seq-pairs
+	// First, left alignment, move out these calls
+	BandedPairWiseSW bswLeft(opt->o_del, opt->e_del, opt->o_ins,
+	                         opt->e_ins, opt->zdrop, opt->pen_clip5,
+	                         opt->mat, opt->a, opt->b, nthreads);
+
+	BandedPairWiseSW bswRight(opt->o_del, opt->e_del, opt->o_ins,
+	                          opt->e_ins, opt->zdrop, opt->pen_clip3,
+	                          opt->mat, opt->a, opt->b, nthreads);
+
+	int i;
+	// Left
+	SeqPair *pair_ar = seqPairArrayLeft128 + numPairsLeft128 + numPairsLeft16;
+	SeqPair *pair_ar_aux = seqPairArrayAux;
+	int nump = numPairsLeft1;
+
+	// scalar
+	for ( i=0; i<MAX_BAND_TRY; i++)
+	{
+		int32_t w = opt->w << i;
+		// uint64_t tim = __rdtsc();
+		bswLeft.scalarBandedSWAWrapper(pair_ar,
+		                               seqBufLeftRef,
+		                               seqBufLeftQer,
+		                               nump,
+		                               nthreads,
+		                               w);
+		// tprof[PE5][0] += nump;
+		// tprof[PE6][0] ++;
+		// tprof[MEM_ALN2_B][tid] += __rdtsc() - tim;
+
+		int num = 0;
+		for (int l=0; l<nump; l++)
+		{
+			mem_alnreg_t *a;
+			SeqPair *sp = &pair_ar[l];
+			a = &(av_v[sp->seqid].a[sp->regid]); // prev
+			int prev = a->score;
+			a->score = sp->score;
+
+			if (a->score == prev || sp->max_off < (w >> 1) + (w >> 2) ||
+			    i+1 == MAX_BAND_TRY)
+			{
+				if (sp->gscore <= 0 || sp->gscore <= a->score - opt->pen_clip5) {
+					a->qb -= sp->qle; a->rb -= sp->tle;
+					a->truesc = a->score;
+				} else {
+					a->qb = 0; a->rb -= sp->gtle;
+					a->truesc = sp->gscore;
+				}
+
+				a->w = max_(a->w, w);
+				if (a->rb != H0_ && a->qb != H0_ && a->qe != H0_ && a->re != H0_)
+				{
+					int i = 0;
+					for (i = 0, a->seedcov = 0; i < a->c->n; ++i){
+						const mem_seed_t *t = &(a->c->seeds[i]);
+						if (t->qbeg >= a->qb && t->qbeg + t->len <= a->qe &&
+						    t->rbeg >= a->rb && t->rbeg + t->len <= a->re)
+							a->seedcov += t->len;
+					}
+				}
+
+			} else {
+				pair_ar_aux[num++] = *sp;
+			}
+		}
+		nump = num;
+		SeqPair *tmp = pair_ar;
+		pair_ar = pair_ar_aux;
+		pair_ar_aux = tmp;
+	}
+
+
+	//****************** Left - vector int16 ***********************
+	assert(numPairsLeft == (numPairsLeft128 + numPairsLeft16 + numPairsLeft1));
+
+	pair_ar = seqPairArrayLeft128 + numPairsLeft128;
+	pair_ar_aux = seqPairArrayAux;
+
+	nump = numPairsLeft16;
+	for ( i=0; i<MAX_BAND_TRY; i++)
+	{
+		int32_t w = opt->w << i;
+		// int64_t tim = __rdtsc();
+#if ((!__AVX512BW__) && (!__AVX2__) && (!__SSE2__))
+		bswLeft.scalarBandedSWAWrapper(pair_ar, seqBufLeftRef, seqBufLeftQer, nump, nthreads, w);
+#else
+		sortPairsLen(pair_ar, nump, seqPairArrayAux, hist);
+		bswLeft.getScores16(pair_ar,
+		                    seqBufLeftRef,
+		                    seqBufLeftQer,
+		                    nump,
+		                    nthreads,
+		                    w);
+#endif
+
+//		tprof[PE5][0] += nump;
+//		tprof[PE6][0] ++;
+		// tprof[MEM_ALN2_B][tid] += __rdtsc() - tim;
+
+		int num = 0;
+		for (int l=0; l<nump; l++)
+		{
+			mem_alnreg_t *a;
+			SeqPair *sp = &pair_ar[l];
+			a = &(av_v[sp->seqid].a[sp->regid]); // prev
+
+			int prev = a->score;
+			a->score = sp->score;
+
+
+			if (a->score == prev || sp->max_off < (w >> 1) + (w >> 2) ||
+			    i+1 == MAX_BAND_TRY)
+			{
+				if (sp->gscore <= 0 || sp->gscore <= a->score - opt->pen_clip5) {
+					a->qb -= sp->qle; a->rb -= sp->tle;
+					a->truesc = a->score;
+				} else {
+					a->qb = 0; a->rb -= sp->gtle;
+					a->truesc = sp->gscore;
+				}
+
+				a->w = max_(a->w, w);
+				if (a->rb != H0_ && a->qb != H0_ && a->qe != H0_ && a->re != H0_)
+				{
+					int i = 0;
+					for (i = 0, a->seedcov = 0; i < a->c->n; ++i){
+						const mem_seed_t *t = &(a->c->seeds[i]);
+						if (t->qbeg >= a->qb && t->qbeg + t->len <= a->qe &&
+						    t->rbeg >= a->rb && t->rbeg + t->len <= a->re)
+							a->seedcov += t->len;
+					}
+				}
+			} else {
+				pair_ar_aux[num++] = *sp;
+			}
+		}
+		nump = num;
+		SeqPair *tmp = pair_ar;
+		pair_ar = pair_ar_aux;
+		pair_ar_aux = tmp;
+	}
+
+	//****************** Left - vector int8 ***********************
+	pair_ar = seqPairArrayLeft128;
+	pair_ar_aux = seqPairArrayAux;
+
+	nump = numPairsLeft128;
+	for ( i=0; i<MAX_BAND_TRY; i++)
+	{
+		int32_t w = opt->w << i;
+		// int64_t tim = __rdtsc();
+
+#if ((!__AVX512BW__) && (!__AVX2__) && (!__SSE2__))
+		bswLeft.scalarBandedSWAWrapper(pair_ar, seqBufLeftRef, seqBufLeftQer, nump, nthreads, w);
+#else
+		sortPairsLen(pair_ar, nump, seqPairArrayAux, hist);
+		bswLeft.getScores8(pair_ar,
+		                   seqBufLeftRef,
+		                   seqBufLeftQer,
+		                   nump,
+		                   nthreads,
+		                   w);
+#endif
+
+//		tprof[PE1][0] += nump;
+//		tprof[PE2][0] ++;
+		// tprof[MEM_ALN2_D][tid] += __rdtsc() - tim;
+
+		int num = 0;
+		for (int l=0; l<nump; l++)
+		{
+			mem_alnreg_t *a;
+			SeqPair *sp = &pair_ar[l];
+			a = &(av_v[sp->seqid].a[sp->regid]); // prev
+
+			int prev = a->score;
+			a->score = sp->score;
+
+			if (a->score == prev || sp->max_off < (w >> 1) + (w >> 2) ||
+			    i+1 == MAX_BAND_TRY)
+			{
+				if (sp->gscore <= 0 || sp->gscore <= a->score - opt->pen_clip5) {
+					a->qb -= sp->qle; a->rb -= sp->tle;
+					a->truesc = a->score;
+				} else {
+					a->qb = 0; a->rb -= sp->gtle;
+					a->truesc = sp->gscore;
+				}
+
+				a->w = max_(a->w, w);
+				if (a->rb != H0_ && a->qb != H0_ && a->qe != H0_ && a->re != H0_)
+				{
+					int i = 0;
+					for (i = 0, a->seedcov = 0; i < a->c->n; ++i){
+						const mem_seed_t *t = &(a->c->seeds[i]);
+						if (t->qbeg >= a->qb && t->qbeg + t->len <= a->qe &&
+						    t->rbeg >= a->rb && t->rbeg + t->len <= a->re)
+							a->seedcov += t->len;
+					}
+				}
+			} else {
+				pair_ar_aux[num++] = *sp;
+			}
+		}
+		nump = num;
+		SeqPair *tmp = pair_ar;
+		pair_ar = pair_ar_aux;
+		pair_ar_aux = tmp;
+	}
+
+	// tprof[CLEFT][tid] += __rdtsc() - timL;
+
+	// uint64_t timR = __rdtsc();
+	// **********************************************************
+	// Right, scalar
+	for (int l=0; l<numPairsRight; l++) {
+		mem_alnreg_t *a;
+		SeqPair *sp = &seqPairArrayRight128[l];
+		a = &(av_v[sp->seqid].a[sp->regid]); // prev
+		sp->h0 = a->score;
+	}
+
+	sortPairsLenExt(seqPairArrayRight128, numPairsRight, seqPairArrayAux,
+	                hist, numPairsRight128, numPairsRight16, numPairsRight1, opt->a);
+
+	assert(numPairsRight == (numPairsRight128 + numPairsRight16 + numPairsRight1));
+
+	pair_ar = seqPairArrayRight128 + numPairsRight128 + numPairsRight16;
+	pair_ar_aux = seqPairArrayAux;
+	nump = numPairsRight1;
+
+	for ( i=0; i<MAX_BAND_TRY; i++)
+	{
+		int32_t w = opt->w << i;
+		// tim = __rdtsc();
+		bswRight.scalarBandedSWAWrapper(pair_ar,
+		                                seqBufRightRef,
+		                                seqBufRightQer,
+		                                nump,
+		                                nthreads,
+		                                w);
+		// tprof[PE7][0] += nump;
+		// tprof[PE8][0] ++;
+		// tprof[MEM_ALN2_C][tid] += __rdtsc() - tim;
+		int num = 0;
+
+		for (int l=0; l<nump; l++)
+		{
+			mem_alnreg_t *a;
+			SeqPair *sp = &pair_ar[l];
+			a = &(av_v[sp->seqid].a[sp->regid]); // prev
+			int prev = a->score;
+			a->score = sp->score;
+
+			// no further banding
+			if (a->score == prev || sp->max_off < (w >> 1) + (w >> 2) ||
+			    i+1 == MAX_BAND_TRY)
+			{
+				if (sp->gscore <= 0 || sp->gscore <= a->score - opt->pen_clip3) {
+					a->qe += sp->qle, a->re += sp->tle;
+					a->truesc += a->score - sp->h0;
+				} else {
+					int l_query = seq_[sp->seqid].l_seq;
+					a->qe = l_query, a->re += sp->gtle;
+					a->truesc += sp->gscore - sp->h0;
+				}
+				a->w = max_(a->w, w);
+				if (a->rb != H0_ && a->qb != H0_ && a->qe != H0_ && a->re != H0_)
+				{
+					int i = 0;
+					for (i = 0, a->seedcov = 0; i < a->c->n; ++i) {
+						const mem_seed_t *t = &a->c->seeds[i];
+						if (t->qbeg >= a->qb && t->qbeg + t->len <= a->qe &&
+						    t->rbeg >= a->rb && t->rbeg + t->len <= a->re)
+							a->seedcov += t->len;
+					}
+				}
+			} else {
+				pair_ar_aux[num++] = *sp;
+			}
+		}
+		nump = num;
+		SeqPair *tmp = pair_ar;
+		pair_ar = pair_ar_aux;
+		pair_ar_aux = tmp;
+	}
+
+	// ************************* Right - vector int16 **********************
+	pair_ar = seqPairArrayRight128 + numPairsRight128;
+	pair_ar_aux = seqPairArrayAux;
+	nump = numPairsRight16;
+
+	for ( i=0; i<MAX_BAND_TRY; i++)
+	{
+		int32_t w = opt->w << i;
+		// uint64_t tim = __rdtsc();
+#if ((!__AVX512BW__) && (!__AVX2__) && (!__SSE2__))
+		bswRight.scalarBandedSWAWrapper(pair_ar, seqBufRightRef, seqBufRightQer, nump, nthreads, w);
+#else
+		sortPairsLen(pair_ar, nump, seqPairArrayAux, hist);
+		bswRight.getScores16(pair_ar,
+		                     seqBufRightRef,
+		                     seqBufRightQer,
+		                     nump,
+		                     nthreads,
+		                     w);
+#endif
+
+//		tprof[PE7][0] += nump;
+//		tprof[PE8][0] ++;
+		// tprof[MEM_ALN2_C][tid] += __rdtsc() - tim;
+
+		int num = 0;
+
+		for (int l=0; l<nump; l++)
+		{
+			mem_alnreg_t *a;
+			SeqPair *sp = &pair_ar[l];
+			a = &(av_v[sp->seqid].a[sp->regid]); // prev
+			//OutScore *o = outScoreArray + l;
+			int prev = a->score;
+			a->score = sp->score;
+
+			// no further banding
+			if (a->score == prev || sp->max_off < (w >> 1) + (w >> 2) ||
+			    i+1 == MAX_BAND_TRY)
+			{
+				if (sp->gscore <= 0 || sp->gscore <= a->score - opt->pen_clip3) {
+					a->qe += sp->qle, a->re += sp->tle;
+					a->truesc += a->score - sp->h0;
+				} else {
+					int l_query = seq_[sp->seqid].l_seq;
+					a->qe = l_query, a->re += sp->gtle;
+					a->truesc += sp->gscore - sp->h0;
+				}
+				a->w = max_(a->w, w);
+				if (a->rb != H0_ && a->qb != H0_ && a->qe != H0_ && a->re != H0_)
+				{
+					int i = 0;
+					for (i = 0, a->seedcov = 0; i < a->c->n; ++i) {
+						const mem_seed_t *t = &a->c->seeds[i];
+						if (t->qbeg >= a->qb && t->qbeg + t->len <= a->qe &&
+						    t->rbeg >= a->rb && t->rbeg + t->len <= a->re)
+							a->seedcov += t->len;
+					}
+				}
+			} else {
+				pair_ar_aux[num++] = *sp;
+			}
+		}
+		nump = num;
+		SeqPair *tmp = pair_ar;
+		pair_ar = pair_ar_aux;
+		pair_ar_aux = tmp;
+	}
+
+
+	// ************************* Right, vector int8 **********************
+	pair_ar = seqPairArrayRight128;
+	pair_ar_aux = seqPairArrayAux;
+	nump = numPairsRight128;
+
+	for ( i=0; i<MAX_BAND_TRY; i++)
+	{
+		int32_t w = opt->w << i;
+		// uint64_t tim = __rdtsc();
+
+#if ((!__AVX512BW__) && (!__AVX2__) && (!__SSE2__))
+		bswRight.scalarBandedSWAWrapper(pair_ar, seqBufRightRef, seqBufRightQer, nump, nthreads, w);
+#else
+		sortPairsLen(pair_ar, nump, seqPairArrayAux, hist);
+		bswRight.getScores8(pair_ar,
+		                    seqBufRightRef,
+		                    seqBufRightQer,
+		                    nump,
+		                    nthreads,
+		                    w);
+#endif
+
+//		tprof[PE3][0] += nump;
+//		tprof[PE4][0] ++;
+		// tprof[MEM_ALN2_E][tid] += __rdtsc() - tim;
+		int num = 0;
+
+		for (int l=0; l<nump; l++)
+		{
+			mem_alnreg_t *a;
+			SeqPair *sp = &pair_ar[l];
+			a = &(av_v[sp->seqid].a[sp->regid]); // prev
+			//OutScore *o = outScoreArray + l;
+			int prev = a->score;
+			a->score = sp->score;
+			// no further banding
+			if (a->score == prev || sp->max_off < (w >> 1) + (w >> 2) ||
+			    i+1 == MAX_BAND_TRY)
+			{
+				if (sp->gscore <= 0 || sp->gscore <= a->score - opt->pen_clip3) {
+					a->qe += sp->qle, a->re += sp->tle;
+					a->truesc += a->score - sp->h0;
+				} else {
+					int l_query = seq_[sp->seqid].l_seq;
+					a->qe = l_query, a->re += sp->gtle;
+					a->truesc += sp->gscore - sp->h0;
+				}
+				a->w = max_(a->w, w);
+				if (a->rb != H0_ && a->qb != H0_ && a->qe != H0_ && a->re != H0_)
+				{
+					int i = 0;
+					for (i = 0, a->seedcov = 0; i < a->c->n; ++i) {
+						const mem_seed_t *t = &a->c->seeds[i];
+						if (t->qbeg >= a->qb && t->qbeg + t->len <= a->qe &&
+						    t->rbeg >= a->rb && t->rbeg + t->len <= a->re)
+							a->seedcov += t->len;
+					}
+				}
+			} else {
+				pair_ar_aux[num++] = *sp;
+			}
+		}
+		nump = num;
+		SeqPair *tmp = pair_ar;
+		pair_ar = pair_ar_aux;
+		pair_ar_aux = tmp;
+	}
+
+	_mm_free(hist);
+	// tprof[CRIGHT][tid] += __rdtsc() - timR;
+
+	if (numPairsLeft >= *wsize_pair || numPairsRight >= *wsize_pair)
+	{   // refine it!
+		fprintf(stderr, "Error: Unexpected behaviour!!!\n");
+		fprintf(stderr, "Error: assert failed for seqPair size, "
+		                "numPairsLeft: %d, numPairsRight %d\nExiting.\n",
+		        numPairsLeft, numPairsRight);
+		exit(EXIT_FAILURE);
+	}
+	/* Discard seeds and hence their alignemnts */
+
+	lim_g[0] = 0;
+	for (int l=1; l<nseq; l++)
+		lim_g[l] += lim_g[l-1];
+
+	// uint64_t tim = __rdtsc();
+	int *lim = (int *) calloc(BATCH_SIZE, sizeof(int));
+	assert(lim != NULL);
+
+	for (int l=0; l<nseq; l++)
+	{
+		int s_start = 0, s_end = 0;
+		uint32_t *srtg = srtgg + lim_g[l];
+
+		int l_query = seq_[l].l_seq;
+		mem_chain_v *chn = &chain_ar[l];
+		mem_alnreg_v *av = &av_v[l];  // alignment
+		mem_chain_t *c;
+
+		for (int j=0; j<chn->n; j++)
+		{
+			c = &chn->a[j];
+//			assert(c->seqid == l);
+
+			s_end = s_start + c->n;
+
+			uint32_t *srt2 = srtg + s_start;
+			s_start += c->n;
+
+			int k = 0;
+			for (k = c->n-1; k >= 0; k--)
+			{
+				s = &c->seeds[srt2[k]];
+				int i = 0;
+				int v = 0;
+				for (i = 0; i < av->n && v < lim[l]; ++i)  // test whether extension has been made before
+				{
+					mem_alnreg_t *p = &av->a[i];
+					if (p->qb == -1 && p->qe == -1) {
+						continue;
+					}
+
+					int64_t rd;
+					int qd, w, max_gap;
+					if (s->rbeg < p->rb || s->rbeg + s->len > p->re || s->qbeg < p->qb
+					    || s->qbeg + s->len > p->qe) {
+						v++; continue; // not fully contained
+					}
+
+					if (s->len - p->seedlen0 > .1 * l_query) { v++; continue;}
+					// qd: distance ahead of the seed on query; rd: on reference
+					qd = s->qbeg - p->qb; rd = s->rbeg - p->rb;
+					// the maximal gap allowed in regions ahead of the seed
+					max_gap = cal_max_gap(opt, qd < rd? qd : rd);
+					w = max_gap < p->w? max_gap : p->w; // bounded by the band width
+					if (qd - rd < w && rd - qd < w) break; // the seed is "around" a previous hit
+					// similar to the previous four lines, but this time we look at the region behind
+					qd = p->qe - (s->qbeg + s->len); rd = p->re - (s->rbeg + s->len);
+					max_gap = cal_max_gap(opt, qd < rd? qd : rd);
+					w = max_gap < p->w? max_gap : p->w;
+					if (qd - rd < w && rd - qd < w) break;
+
+					v++;
+				}
+
+				// the seed is (almost) contained in an existing alignment;
+				// further testing is needed to confirm it is not leading
+				// to a different aln
+				if (v < lim[l])
+				{
+					for (v = k + 1; v < c->n; ++v)
+					{
+						const mem_seed_t *t;
+						if (srt2[v] == UINT_MAX) continue;
+						t = &c->seeds[srt2[v]];
+						//if (t->done == H0_) continue;  //check for interferences!!!
+						// only check overlapping if t is long enough;
+						// TODO: more efficient by early stopping
+						if (t->len < s->len * .95) continue;
+						if (s->qbeg <= t->qbeg && s->qbeg + s->len - t->qbeg >= s->len>>2 &&
+						    t->qbeg - s->qbeg != t->rbeg - s->rbeg) break;
+						if (t->qbeg <= s->qbeg && t->qbeg + t->len - s->qbeg >= s->len>>2 &&
+						    s->qbeg - t->qbeg != s->rbeg - t->rbeg) break;
+					}
+					if (v == c->n) {                  // no overlapping seeds; then skip extension
+						mem_alnreg_t *ar = &(av_v[l].a[s->aln]);
+						ar->qb = ar->qe = -1;         // purge the alingment
+						srt2[k] = UINT_MAX;
+//						tprof[PE18][tid]++;
+						continue;
+					}
+				}
+				lim[l]++;
+			}
+		}
+	}
+	free(srtgg);
+	free(srt);
+	free(lim);
+	// tprof[MEM_ALN2_DOWN][tid] += __rdtsc() - tim;
+}
 
 static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 	_end = std::min(_end, w->n); // Out of right boundary happens
@@ -1250,6 +2347,12 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 	aux.sal_real += __rdtsc() - real_start;
 
 	real_start = __rdtsc();
+	mem_chain_v chain_ar[n];
+	mem_alnreg_v reg_ar[n];
+	for (int r = 0; r < n; r++) {
+		kv_init(chain_ar[r]);
+		kv_init(reg_ar[r]);
+	}
 	for (int r = 0; r < n; r++) {
 		auto &read = w->seqs[_start + r];
 		auto *seq = (uint8_t*) read.seq;
@@ -1263,15 +2366,29 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 		// 3. Filter out poor seeds
 		mem_flt_chained_seeds(opt, bns, pac, read.l_seq, seq, chn.n, chn.a);
 		if (bwa_verbose >= 4) mem_print_chain(bns, &chn);
-		// 4. Extend seeds in chain to aligned regions using local smith-waterman
-		mem_alnreg_v regs; kv_init(regs);
-		for (int i = 0; i < chn.n; ++i) {
-			mem_chain_t *p = &chn.a[i];
-			if (bwa_verbose >= 4) err_printf("* ---> Processing chain(%d) <---\n", i);
-			mem_chain2aln(opt, bns, pac, read.l_seq, seq, p, &regs);
-			free(chn.a[i].seeds);
+		chain_ar[r] = chn;
+	}
+
+	// 4. SIMD Banded Smith Waterman
+	mem_chain2aln_across_reads_V2(opt, bns, pac, w->seqs + _start, n, chain_ar, reg_ar, &w->mmc, tid);
+
+	for (int r = 0; r < n; r++) {
+		auto &read = w->seqs[_start + r];
+		auto *seq = (uint8_t*) read.seq;
+		mem_chain_v *chain = &chain_ar[r];
+		for (int i = 0; i < chain->n; ++i) {
+			free(chain->a[i].seeds);
 		}
-		free(chn.a);
+		free(chain->a);
+		mem_alnreg_v regs = reg_ar[r];
+		int m = 0;
+		for (int i = 0; i < regs.n; ++i) { // exclude identical hits
+			if (regs.a[i].qe > regs.a[i].qb) {
+				if (m != i) regs.a[m++] = regs.a[i];
+				else ++m;
+			}
+		}
+		regs.n = m;
 		// 5. Filter out shadowed hits
 		regs.n = mem_sort_dedup_patch(opt, bns, pac, seq, regs.n, regs.a);
 		if (bwa_verbose >= 4) {
@@ -1297,6 +2414,114 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 	aux.ext_real += __rdtsc() - real_start;
 }
 
+/*** Memory pre-allocations ***/
+void memoryAlloc(const mem_opt_t *opt, worker_t &w, int32_t nreads, int32_t nthreads) {
+	int32_t memSize = nreads;
+	int32_t readLen = READ_LEN;
+
+	/* Mem allocation section for core kernels */
+//	w.regs = NULL; w.chain_ar = NULL; w.seedBuf = NULL;
+//	w.regs = (mem_alnreg_v *) calloc(memSize, sizeof(mem_alnreg_v));
+//	w.chain_ar = (mem_chain_v*) malloc (memSize * sizeof(mem_chain_v));
+//	w.seedBuf = (mem_seed_t *) calloc(sizeof(mem_seed_t),  memSize * AVG_SEEDS_PER_READ);
+
+//	assert(w.seedBuf  != NULL);
+//	assert(w.regs     != NULL);
+//	assert(w.chain_ar != NULL);
+
+//	w.seedBufSize = BATCH_SIZE * AVG_SEEDS_PER_READ;
+
+	/*** printing ***/
+//	int64_t allocMem = memSize * sizeof(mem_alnreg_v) +
+//	                   memSize * sizeof(mem_chain_v) +
+//	                   sizeof(mem_seed_t) * memSize * AVG_SEEDS_PER_READ;
+//	fprintf(stderr, "------------------------------------------\n");
+//	fprintf(stderr, "1. Memory pre-allocation for Chaining: %0.4lf MB\n", allocMem/1e6);
+
+
+	/* SWA mem allocation */
+	int64_t wsize = BATCH_SIZE * SEEDS_PER_READ;
+	for(int l=0; l<nthreads; l++)
+	{
+		w.mmc.seqBufLeftRef[l*CACHE_LINE]  = (uint8_t *)
+				_mm_malloc(wsize * MAX_SEQ_LEN_REF * sizeof(int8_t) + MAX_LINE_LEN, 64);
+		w.mmc.seqBufLeftQer[l*CACHE_LINE]  = (uint8_t *)
+				_mm_malloc(wsize * MAX_SEQ_LEN_QER * sizeof(int8_t) + MAX_LINE_LEN, 64);
+		w.mmc.seqBufRightRef[l*CACHE_LINE] = (uint8_t *)
+				_mm_malloc(wsize * MAX_SEQ_LEN_REF * sizeof(int8_t) + MAX_LINE_LEN, 64);
+		w.mmc.seqBufRightQer[l*CACHE_LINE] = (uint8_t *)
+				_mm_malloc(wsize * MAX_SEQ_LEN_QER * sizeof(int8_t) + MAX_LINE_LEN, 64);
+
+		w.mmc.wsize_buf_ref[l*CACHE_LINE] = wsize * MAX_SEQ_LEN_REF;
+		w.mmc.wsize_buf_qer[l*CACHE_LINE] = wsize * MAX_SEQ_LEN_QER;
+
+		assert(w.mmc.seqBufLeftRef[l*CACHE_LINE]  != NULL);
+		assert(w.mmc.seqBufLeftQer[l*CACHE_LINE]  != NULL);
+		assert(w.mmc.seqBufRightRef[l*CACHE_LINE] != NULL);
+		assert(w.mmc.seqBufRightQer[l*CACHE_LINE] != NULL);
+	}
+
+	for(int l=0; l<nthreads; l++) {
+		w.mmc.seqPairArrayAux[l]      = (SeqPair *) malloc((wsize + MAX_LINE_LEN)* sizeof(SeqPair));
+		w.mmc.seqPairArrayLeft128[l]  = (SeqPair *) malloc((wsize + MAX_LINE_LEN)* sizeof(SeqPair));
+		w.mmc.seqPairArrayRight128[l] = (SeqPair *) malloc((wsize + MAX_LINE_LEN)* sizeof(SeqPair));
+		w.mmc.wsize[l] = wsize;
+
+		assert(w.mmc.seqPairArrayAux[l] != NULL);
+		assert(w.mmc.seqPairArrayLeft128[l] != NULL);
+		assert(w.mmc.seqPairArrayRight128[l] != NULL);
+	}
+
+
+//	allocMem = (wsize * MAX_SEQ_LEN_REF * sizeof(int8_t) + MAX_LINE_LEN) * opt->n_threads * 2+
+//			   (wsize * MAX_SEQ_LEN_QER * sizeof(int8_t) + MAX_LINE_LEN) * opt->n_threads  * 2 +
+//			    wsize * sizeof(SeqPair) * opt->n_threads * 3;
+//	fprintf(stderr, "2. Memory pre-allocation for BSW: %0.4lf MB\n", allocMem/1e6);
+
+	for (int l=0; l<nthreads; l++)
+	{
+		w.mmc.wsize_mem[l]     = BATCH_MUL * BATCH_SIZE *               readLen;
+//		w.mmc.matchArray[l]    = (SMEM *) _mm_malloc(w.mmc.wsize_mem[l] * sizeof(SMEM), 64);
+//		w.mmc.min_intv_ar[l]   = (int32_t *) malloc(w.mmc.wsize_mem[l] * sizeof(int32_t));
+//		w.mmc.query_pos_ar[l]  = (int16_t *) malloc(w.mmc.wsize_mem[l] * sizeof(int16_t));
+//		w.mmc.enc_qdb[l]       = (uint8_t *) malloc(w.mmc.wsize_mem[l] * sizeof(uint8_t));
+//		w.mmc.rid[l]           = (int32_t *) malloc(w.mmc.wsize_mem[l] * sizeof(int32_t));
+		w.mmc.lim[l]           = (int32_t *) _mm_malloc((BATCH_SIZE + 32) * sizeof(int32_t), 64); // candidate not for reallocation, deferred for next round of changes.
+	}
+
+//	allocMem = nthreads * BATCH_MUL * BATCH_SIZE * readLen * sizeof(SMEM) +
+//	           nthreads * BATCH_MUL * BATCH_SIZE * readLen *sizeof(int32_t) +
+//	           nthreads * BATCH_MUL * BATCH_SIZE * readLen *sizeof(int16_t) +
+//	           nthreads * BATCH_MUL * BATCH_SIZE * readLen *sizeof(int32_t) +
+//	           nthreads * (BATCH_SIZE + 32) * sizeof(int32_t);
+//	fprintf(stderr, "3. Memory pre-allocation for BWT: %0.4lf MB\n", allocMem/1e6);
+//	fprintf(stderr, "------------------------------------------\n");
+}
+
+void memoryFree(worker_t &w, int nthreads) {
+	for(int l=0; l<nthreads; l++) {
+		_mm_free(w.mmc.seqBufLeftRef[l*CACHE_LINE]);
+		_mm_free(w.mmc.seqBufRightRef[l*CACHE_LINE]);
+		_mm_free(w.mmc.seqBufLeftQer[l*CACHE_LINE]);
+		_mm_free(w.mmc.seqBufRightQer[l*CACHE_LINE]);
+	}
+
+	for(int l=0; l<nthreads; l++) {
+		free(w.mmc.seqPairArrayAux[l]);
+		free(w.mmc.seqPairArrayLeft128[l]);
+		free(w.mmc.seqPairArrayRight128[l]);
+	}
+
+	for(int l=0; l<nthreads; l++) {
+//		_mm_free(w.mmc.matchArray[l]);
+//		free(w.mmc.min_intv_ar[l]);
+//		free(w.mmc.query_pos_ar[l]);
+//		free(w.mmc.enc_qdb[l]);
+//		free(w.mmc.rid[l]);
+		_mm_free(w.mmc.lim[l]);
+	}
+}
+
 void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bns, const uint8_t *pac, int64_t n_processed, int n, bseq1_t *seqs, const mem_pestat_t *pes0) {
 	worker_t w;
 	double ctime, rtime;
@@ -1309,6 +2534,7 @@ void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 		w.aux[i].forward_sst = new SST(bwt);
 		w.aux[i].backward_sst = new SST(bwt);
 	}
+	memoryAlloc(opt, w, n, opt->n_threads);
 
 	kt_for(
 			opt->n_threads,
@@ -1325,6 +2551,7 @@ void mem_process_seqs(const mem_opt_t *opt, const bwt_t *bwt, const bntseq_t *bn
 		delete w.aux[i].backward_sst;
 	}
 	delete [] w.aux;
+	memoryFree(w, opt->n_threads);
 
 	if (bwa_verbose >= 3)
 		fprintf(stderr, "[M::%s] Processed %d reads in %.3f CPU sec, %.3f real sec\n", __func__, n, cputime() - ctime, realtime() - rtime);

@@ -12,6 +12,8 @@
 #include "../cstl/kvec.h"
 #include "../cstl/kstring.h"
 #include "SST.h"
+#include "macro.h"
+#include "bandedSWA.h"
 
 #define MEM_MAPQ_COEF 30.0
 #define MEM_MAPQ_MAX  60
@@ -74,8 +76,10 @@ typedef struct {
  * NGS compressors, which are typically designed for fixed-length reads of hundreds of base pairs. */
 struct mem_seed_t {
 	int64_t rbeg;
-	int16_t qbeg, len;
+	int32_t qbeg;
+	int32_t len;
 	int32_t score;
+	int32_t aln;
 };
 
 /* A request for Suffix Array Lookup(SAL) */
@@ -92,9 +96,18 @@ struct sal_request_t {
 };
 
 typedef struct {
+	int n, m, first, rid;
+	uint32_t w:29, kept:2, is_alt:1;
+	float frac_rep;
+	int64_t pos;
+	mem_seed_t *seeds;
+} mem_chain_t;
+
+typedef struct {
 	int64_t rb, re; // [rb,re): reference sequence in the alignment
 	int qb, qe;     // [qb,qe): query sequence in the alignment
 	int rid;        // reference seq ID
+	mem_chain_t *c;
 	int score;      // best local SW score
 	int truesc;     // actual score corresponding to the aligned region; possibly smaller than $score
 	int sub;        // 2nd best SW score

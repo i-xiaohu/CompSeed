@@ -3,8 +3,8 @@ project(comp_seed)
 
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -Wall -O2")
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wall -O3")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O2")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O3")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O2 -mavx")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O3 -mavx")
 
 set(cstl
         cstl/kvec.h
@@ -43,6 +43,9 @@ target_link_libraries(bwamem -lm -lz -lpthread -lrt)
 
 add_executable(CompSeed ${cstl} ${FM_index} ${bwalib}
         mapping/comp_seed.cpp mapping/comp_seed.h
-        mapping/SST.cpp mapping/SST.cpp
+        mapping/SST.cpp mapping/SST.h
+        mapping/bandedSWA.cpp mapping/bandedSWA.h
+        mapping/memcpy_bwamem.cpp mapping/memcpy_bwamem.h
+        mapping/macro.h
         main.cpp)
 target_link_libraries(CompSeed -lm -lz -lpthread -lrt)
