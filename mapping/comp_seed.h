@@ -81,8 +81,11 @@ struct mem_seed_t {
 /* A request for Suffix Array Lookup(SAL) */
 struct sal_request_t {
 	uint64_t que_location; // The request position in suffix array
-	uint32_t read_id, array_id; // Which mem of which read made the request
-	sal_request_t(uint64_t h, uint32_t r, uint32_t a): que_location(h), read_id(r), array_id(a) {}
+	uint64_t coordinate; // SA(que_loc)
+//	uint32_t read_id, array_id; // Which mem of which read made the request
+//	sal_request_t(uint64_t h, uint32_t r, uint32_t a): que_location(h), read_id(r), array_id(a) {}
+	sal_request_t() = default;
+	explicit sal_request_t(uint64_t q): que_location(q), coordinate(-1) {}
 	bool operator < (const sal_request_t &a) const { // Sort to merge duplicated SAL requests
 		return this->que_location < a.que_location;
 	}

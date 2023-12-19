@@ -136,8 +136,8 @@ int collect_mem_with_sst(const uint8_t *seq, int len, int pivot, int min_hits, t
 }
 
 int tem_forward_sst(const mem_opt_t *opt, const uint8_t *seq, int len, int start, bwtintv_t *mem, thread_aux_t &aux) {
-	if (seq[start] > 3) return start + 1;
 	memset(mem, 0, sizeof(bwtintv_t));
+	if (seq[start] > 3) return start + 1;
 	int node_id = aux.forward_sst->query_forward_child(0, seq[start]);
 	bwtintv_t ik = aux.forward_sst->get_intv(node_id);
 	for (int i = start + 1; i < len; i++) {
@@ -1219,23 +1219,33 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 				mem_seed_t s = {0};
 				s.qbeg = mem_beg(m);
 				s.score = s.len = mem_len(m);
+				s.rbeg = m.x[0] + k; // Temporarily store SAL request
 				seed.push_back(s);
-				unique_sal.emplace_back(sal_request_t(m.x[0] + k, r, array_id));
+				unique_sal.emplace_back(sal_request_t(m.x[0] + k));
 				aux.sal_query_times++;
 				array_id++;
 			}
 		}
 	}
 	std::sort(unique_sal.begin(), unique_sal.end());
-	uint64_t coordinate = 0;
+	int _size = 0;
 	for (int i = 0; i < unique_sal.size(); i++) {
-		const auto &p = unique_sal[i];
-		if (i == 0 or unique_sal[i-1].que_location != p.que_location) {
-			coordinate = bwt_sa(bwt, p.que_location);
-			aux.sal_call_times++;
+		if (i == 0 or unique_sal[i-1].que_location != unique_sal[i].que_location) {
+			unique_sal[_size++] = unique_sal[i];
 		}
-		auto &s = aux.seed[p.read_id][p.array_id];
-		s.rbeg = coordinate;
+	}
+	unique_sal.resize(_size);
+	// Perform SAL according to the original order
+	for (int r = 0; r < n; r++) {
+		for (auto &s : aux.seed[r]) {
+			auto k = std::lower_bound(unique_sal.begin(), unique_sal.end(), sal_request_t(s.rbeg));
+			assert(k != unique_sal.end() && k->que_location == s.rbeg);
+			if (k->coordinate == -1) {
+				k->coordinate = bwt_sa(bwt, s.rbeg);
+				aux.sal_call_times++;
+			}
+			s.rbeg = k->coordinate;
+		}
 	}
 	aux.sal_real += __rdtsc() - real_start;
 
