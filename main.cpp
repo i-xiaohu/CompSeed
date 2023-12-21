@@ -207,13 +207,16 @@ void display_profile(const thread_aux_t &t) {
 	        t.bwt_query_times, t.bwt_call_times, 100.0 * (t.bwt_query_times - t.bwt_call_times) / t.bwt_query_times);
 	fprintf(stderr, "SA Lookup:   %ld queries, %ld calls, %.2f %% merged\n",
 	        t.sal_query_times, t.sal_call_times, 100.0 * (t.sal_query_times - t.sal_call_times) / t.sal_query_times);
-	fprintf(stderr, "Wall time:   BWT %.2f SAL %.2f DP %.2f seconds\n",
-	        (double)t.bwt_real/cf, (double)t.sal_real/cf, (double)t.ext_real/cf);
+	fprintf(stderr, "Wall time:   BWT %.2f SAL %.2f DP %.2f SIMD %.2f seconds\n",
+	        (double)t.bwt_real/cf, (double)t.sal_real/cf, (double)t.ext_real/cf, (double)t.simd_real/cf);
 	fprintf(stderr, "BWT stage:   %.2f %.2f %.2f seconds\n",
 	        (double)t.first/cf, (double)t.second/cf, (double)t.third/cf);
 }
 
 int main(int argc, char *argv[]) {
+#if ((!__AVX512BW__) && (!__AVX2__) && (__SSE2__))
+	fprintf(stderr, "Smith-Waterman in AVX mode\n");
+#endif
 	mem_opt_t *opt, opt0;
 	int fd, fd2, i, c, ignore_alt = 0, no_mt_io = 0;
 	int fixed_chunk_size = -1;

@@ -1167,7 +1167,7 @@ void* _mm_realloc(void *ptr, int64_t csize, int64_t nsize, int16_t dsize) {
 	}
 	void *nptr = _mm_malloc(nsize * dsize, 64);
 	assert(nptr != NULL);
-	memcpy_bwamem(nptr, nsize * dsize, ptr, csize, __FILE__, __LINE__);
+	memcpy_bwamem(nptr, nsize * dsize, ptr, csize, (char*)__FILE__, __LINE__);
 	_mm_free(ptr);
 
 	return nptr;
@@ -2370,7 +2370,9 @@ static void seed_and_extend(worker_t *w, int _start, int _end, int tid) {
 	}
 
 	// 4. SIMD Banded Smith Waterman
+	int64_t rst = __rdtsc();
 	mem_chain2aln_across_reads_V2(opt, bns, pac, w->seqs + _start, n, chain_ar, reg_ar, &w->mmc, tid);
+	aux.simd_real += __rdtsc() - rst;
 
 	for (int r = 0; r < n; r++) {
 		auto &read = w->seqs[_start + r];

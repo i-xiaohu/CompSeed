@@ -159,7 +159,7 @@ struct thread_aux_t {
 	long sal_call_times = 0, sal_query_times = 0;
 	long bwt_call_times = 0, bwt_query_times = 0;
 	// CPU cycles of each stage for each thread
-	uint64_t bwt_real = 0, sal_real = 0, ext_real = 0;
+	uint64_t bwt_real = 0, sal_real = 0, ext_real = 0, simd_real = 0;
 	uint64_t first = 0, second = 0, third = 0;
 	void operator += (const thread_aux_t &a) {
 		bwt_call_times += a.bwt_call_times;
@@ -169,6 +169,7 @@ struct thread_aux_t {
 		bwt_real += a.bwt_real;
 		sal_real += a.sal_real;
 		ext_real += a.ext_real;
+		simd_real += a.simd_real;
 		first += a.first;
 		second += a.second;
 		third += a.third;
