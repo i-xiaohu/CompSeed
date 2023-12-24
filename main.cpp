@@ -214,9 +214,6 @@ void display_profile(const thread_aux_t &t) {
 }
 
 int main(int argc, char *argv[]) {
-#if ((!__AVX512BW__) && (!__AVX2__) && (__SSE2__))
-	fprintf(stderr, "Smith-Waterman in AVX mode\n");
-#endif
 	mem_opt_t *opt, opt0;
 	int fd, fd2, i, c, ignore_alt = 0, no_mt_io = 0;
 	int fixed_chunk_size = -1;
@@ -342,6 +339,16 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
+#if __AVX512BW__
+	fprintf(stderr, "Executing Banded Smith-Waterman in AVX512 mode\n");
+#elif __AVX2__
+	fprintf(stderr, "Executing Banded Smith-Waterman in AVX2 mode\n");
+#elif __AVX__
+	fprintf(stderr, "Executing Banded Smith-Waterman in AVX mode\n");
+#elif __SSE4_2__
+	fprintf(stderr, "Executing Banded Smith-Waterman in SSE4.2 mode\n");
+#endif
+
 	if (rg_line) {
 		hdr_line = bwa_insert_header(rg_line, hdr_line);
 		free(rg_line);
@@ -425,6 +432,7 @@ int main(int argc, char *argv[]) {
 //			opt->flag |= MEM_F_PE;
 //		}
 //	}
+
 	bwa_print_sam_hdr(aux.idx->bns, hdr_line);
 	aux.actual_chunk_size = fixed_chunk_size > 0? fixed_chunk_size : opt->chunk_size * opt->n_threads;
 	kt_pipeline(no_mt_io? 1 : 2, process, &aux, 3);

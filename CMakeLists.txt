@@ -1,10 +1,32 @@
 cmake_minimum_required(VERSION 3.10)
 project(comp_seed)
 
-#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -Wall -O2")
-#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wall -O3")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O3 -mavx")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O3 -fpermissive -mavx")
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-mavx512bw" AVX512_SUPPORTED)
+check_cxx_compiler_flag("-mavx2" AVX2_SUPPORTED)
+check_cxx_compiler_flag("-mavx" AVX_SUPPORTED)
+check_cxx_compiler_flag("-msse4.2" SSSE_SUPPORTED)
+
+if (AVX512_SUPPORTED)
+    message("AVX512 instructions are supported on this machine.")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx512bw")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx512bw")
+elseif(AVX2_SUPPORTED)
+    message("AVX2 instructions are supported on this machine.")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2")
+elseif (AVX_SUPPORTED)
+    message("AVX instructions are supported on this machine.")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx")
+elseif (SSSE_SUPPORTED)
+    message("AVX instructions are supported on this machine.")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse -msse2 -msse3 -mssse3 -msse4.1 -msse4.2")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse -msse2 -msse3 -mssse3 -msse4.1 -msse4.2")
+endif()
+
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O3")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O3")
 
 set(cstl
         cstl/kvec.h

@@ -15,16 +15,16 @@ cmake ..; make
 ```
 
 If the installation is successful, the build subdirectory will contain the executable files.
- - `bwaidx` to create the FM-index for a reference file.
- - `bwamem_seeding` to run BWA-MEM seeding for sequencing reads.
- - `comp_seeding` to run compressive seeding for reordered reads.
+ - `bwaidx` to create FM-index for a reference file.
+ - `bwamem` to run BWA-MEM (v0.7.17) for sequencing reads.
+ - `CompSeed` to run compressive seeding for reordered reads that generates same seeds and alignments as BWA-MEM.
 
 ## Declaration
 
-CompSeed is an algorithm demonstration for compressive alignment, by far not a standalone tool. It 
+CompSeed is an algorithm demonstration for compressive alignment. It 
 received the reads compressed and reordered by upstream reordering-based compressors, including 
 [SPRING](https://github.com/shubhamchandak94/Spring),  [Minicom](https://github.com/yuansliu/minicom) 
-and [PgRC](https://github.com/kowallus/PgRC). While CompSeed can only support for single-end compression and alignment, 
+and [PgRC](https://github.com/kowallus/PgRC). While CompSeed currently only supporst for single-end compression and alignment, 
 the project of integrating compression and alignment is underway.
 
 ## Example usage
@@ -49,23 +49,19 @@ minicom -d data.mincom -t 16; mv data_dec.reads minicom.reads
 pgrc -t 16 -d data.pgrc; mv data.pgrc_out pgrc.reads
 ```
 
-Run BWA-MEM seeding and record the time.
+Run BWA-MEM.
 ```bash
-/usr/bin/time bwamem_seeding -t 16 hg19 data.fq 
+bwamem -t 16 hg19 data.fq > bwa.sam
 ```
 
-Run CompSeed and record the time.
+Run CompSeed.
 ```bash
-/usr/bin/time comp_seeding -t 16 hg19 spring.reads 
-/usr/bin/time comp_seeding -t 16 hg19 minicom.reads
-/usr/bin/time comp_seeding -t 16 hg19 pgrc.reads
+CompSeed  -t 16 hg19 spring.reads  > css.sam
+CompSeed -t 16 hg19 minicom.reads > csm.sam
+CompSeed -t 16 hg19 pgrc.reads > csp.sam
 ```
 
-Both `bwamem_seeding` and `comp_seeding` have an option `--print` to output seeds in text format to stdout for
-checking the seed identity. But do not turn it on when comparing the speed because the output time significantly degrades
-the benchmarked results.
-
-For `bwamem_seeding` and `comp_seeding`, all the original parameters of BWA-MEM seeding are supported.
+For `CompSeed`, all the original parameters of BWA-MEM seeding are supported.
 ```
     -t  number of threads
     -k  minimum seed length
@@ -76,15 +72,20 @@ For `bwamem_seeding` and `comp_seeding`, all the original parameters of BWA-MEM 
 ```
 
 ## Results
-CompSeed fully utilizes the redundancy information provided from upstream compressors, and avoids ~50% of the redundant
-time-consuming FM-index operations during the BWA-MEM seeding process.
+CompSeed fully utilizes the redundancy information provided from upstream compressors using trie structures, and 
+avoids ~50% of the redundant time-consuming FM-index operations during the BWA-MEM seeding process.
+
+![SST](images/Figure1.jpg)
+
+After combined with AVX instructions for extension stage, a doubled alignment throughput is observed.
 
 ![Seeding time of BWA-MEM and CompSeed](images/Table1.jpg)
 
 It shows enhanced performance as sequencing coverage increases, and it is almost not affected by the re-seeding parameter.
 Moreover, it has substantial memory advantage compared with the existing solutions, because it does not replace or modify 
 the FM-index. All the acceleration benefits from the compression, thus does not conflict with existing hardware-based optimizations.
-![Seeding time of BWA-MEM and CompSeed](images/Figure1.jpg)
+
+![Seeding time of BWA-MEM and CompSeed](images/Figure2.jpg)
 
 ## References
 
